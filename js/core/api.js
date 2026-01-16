@@ -159,3 +159,7 @@ export async function adminUpdate(sessionId, dataType, op, data){
     data: JSON.stringify(data)
   });
 }
+
+export async function getMapData(sessionId, tripId, includeManifest = 0){
+  return apiCall('getMapData', { sessionId, tripId, includeManifest }, { method: 'GET' });
+}

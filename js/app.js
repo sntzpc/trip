@@ -2,7 +2,7 @@ import * as api from './core/api.js';
 import { loadSession, clearSession, loadCfg, saveCfg } from './core/storage.js';
 import { $, showNotification, activateMenu, showPage, toggleSidebar as _toggleSidebar, closeSidebarOnMobile } from './core/ui.js';
 import { doLogin, bindLoginEnter } from './pages/login.js';
-import { loadDashboard } from './pages/dashboard.js';
+import { loadDashboard, showRegionDetailsUI, hideRegionDetailsUI } from './pages/dashboard.js';
 import { initMap, refreshMap } from './pages/map.js';
 import { startScanning, manualSubmit, confirmAssignment, getPendingVehicle } from './pages/scan.js';
 import { renderFamily, confirmArrival as doConfirmArrival } from './pages/arrival.js';
@@ -15,6 +15,14 @@ const State = {
   cfg: null,
   mapTimer: null
 };
+
+// Expose dashboard detail actions (setelah State ada)
+window.showRegionDetails = ()=> State.session ? showRegionDetailsUI(State.session) : null;
+window.hideRegionDetails = ()=> hideRegionDetailsUI();
+
+// tambahan: vehicle detail
+window.showVehicleDetails = ()=> State.session ? window.__showVehicleDetailsUI?.(State.session) : null;
+window.hideVehicleDetails = ()=> window.__hideVehicleDetailsUI?.();
 
 // Boot
 document.addEventListener('DOMContentLoaded', async ()=>{

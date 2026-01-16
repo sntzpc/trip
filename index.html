@@ -4,8 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Trip Tracker</title>
-    <link rel="stylesheet" href="libs/all.min.css">
-    <link rel="stylesheet" href="libs/leaflet.css" />
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
     <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="style.css">
 </head>
@@ -269,6 +269,18 @@
             <!-- Map Page -->
             <div id="mapPage" class="content-page" style="display:none;">
                 <h1 class="page-title">Pemantauan Perjalanan Real-time</h1>
+                 <!-- ✅ Tracking Bar (dipindahkan dari map.js) -->
+                <div id="trackBar" class="map-trackbar" style="display:none;">
+                    <button class="btn-primary" id="btnStartTrack" type="button">
+                    <i class="fas fa-location-arrow"></i> Mulai Kirim Lokasi
+                    </button>
+                    <button class="btn-secondary" id="btnStopTrack" type="button" disabled>
+                    <i class="fas fa-stop"></i> Stop
+                    </button>
+                    <select id="trackVehiclePick" style="padding:12px 15px; border:2px solid #ddd; border-radius:8px;">
+                    <option value="">Pilih kendaraan untuk tracking...</option>
+                    </select>
+                </div>
                 <div class="map-container">
                     <div id="map"></div>
                     <div class="map-controls">
@@ -497,7 +509,7 @@
     <div id="notificationContainer" class="notification-container"></div>
 
     <!-- Scripts -->
-    <script src="libs/leaflet.js"></script>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="libs/html5-qrcode.min.js"></script>
     <script type="module" src="js/app.js"></script>
 </body>

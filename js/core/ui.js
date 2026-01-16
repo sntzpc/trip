@@ -62,10 +62,70 @@ export function showPage(pageId){
 
 export function toggleSidebar(){
   const sb = $('#sidebar');
-  sb?.classList.toggle('show');
+  if (!sb) return;
+  const willOpen = !sb.classList.contains('open');
+  sb.classList.toggle('open', willOpen);
+  document.body.classList.toggle('sidebar-open', willOpen);
 }
 
 export function closeSidebarOnMobile(){
   const sb = $('#sidebar');
-  if (window.innerWidth <= 768) sb?.classList.remove('show');
+  if (!sb) return;
+  if (window.innerWidth <= 768){
+    sb.classList.remove('open');
+    document.body.classList.remove('sidebar-open');
+  }
+}
+
+// ===== MAP TRACKING UI (dipindahkan dari map.js) =====
+export function ensureMapTrackingUI({ onStart, onStop } = {}){
+  const bar = document.getElementById('trackBar');
+  if (!bar) return null;
+
+  // tampilkan bar (kalau mapPage dibuka)
+  bar.style.display = 'flex';
+
+  // bind event sekali saja
+  if (bar.dataset.bound === '1') return bar;
+  bar.dataset.bound = '1';
+
+  const btnStart = document.getElementById('btnStartTrack');
+  const btnStop  = document.getElementById('btnStopTrack');
+
+  btnStart?.addEventListener('click', () => {
+    try { onStart && onStart(); } catch (e) {}
+  });
+
+  btnStop?.addEventListener('click', () => {
+    try { onStop && onStop(); } catch (e) {}
+  });
+
+  return bar;
+}
+
+export function setMapTrackingButtons(isTracking){
+  const btnStart = document.getElementById('btnStartTrack');
+  const btnStop  = document.getElementById('btnStopTrack');
+  if (btnStart) btnStart.disabled = !!isTracking;
+  if (btnStop)  btnStop.disabled  = !isTracking;
+}
+
+export function setTrackVehicleOptionsUI(vehicles, { keepValue = true } = {}){
+  const sel = document.getElementById('trackVehiclePick');
+  if (!sel) return;
+
+  const cur = keepValue ? (sel.value || '') : '';
+  const opts = (vehicles || []).map(v => {
+    const code = String(v.code || '');
+    const type = String(v.type || '');
+    const st   = String(v.status || '');
+    // aman: karena value dari server, minimal escape attribute
+    const safeVal = code.replaceAll('"','&quot;');
+    const label = `${code} • ${type} • ${st}`;
+    return `<option value="${safeVal}">${label}</option>`;
+  }).join('');
+
+  sel.innerHTML = `<option value="">Pilih kendaraan untuk tracking...</option>${opts}`;
+
+  if (cur) sel.value = cur;
 }

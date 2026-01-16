@@ -111,22 +111,54 @@ function sh(name){
 }
 
 function ensureHeader(sheet, headers){
-  if (sheet.getLastRow() === 0){
-    sheet.appendRow(headers);
+  const lastRow = sheet.getLastRow();
+  const lastCol = sheet.getLastColumn();
+
+  // sheet benar-benar kosong
+  if (lastRow === 0) {
+    sheet.getRange(1,1,1,headers.length).setValues([headers]);
+    sheet.setFrozenRows(1);
     return;
   }
-  const existing = sheet.getRange(1,1,1,sheet.getLastColumn()).getValues()[0];
-  if (!existing || existing.length === 0){
-    sheet.appendRow(headers);
+
+  // baca row-1 (kalau belum ada kolom, treat kosong)
+  const existing = (lastCol > 0)
+    ? sheet.getRange(1,1,1,lastCol).getValues()[0].map(x => String(x || '').trim())
+    : [];
+
+  const allEmpty = existing.length === 0 || existing.every(x => !x);
+  if (allEmpty) {
+    sheet.getRange(1,1,1,headers.length).setValues([headers]);
+    sheet.setFrozenRows(1);
     return;
   }
-  // If first row doesn't match, do nothing (assume already configured)
+
+  // tambah kolom header yang belum ada
+  const existingSet = new Set(existing.filter(Boolean));
+  const missing = headers.filter(h => !existingSet.has(String(h)));
+
+  if (missing.length) {
+    const startCol = existing.length + 1;
+    sheet.getRange(1, startCol, 1, missing.length).setValues([missing]);
+  }
+
+  sheet.setFrozenRows(1);
 }
 
 function ensureInitialized(){
-  const prop = PropertiesService.getScriptProperties();
-  if (prop.getProperty('TT_INIT') === '1') return;
+  // dipanggil setiap request webapp
+  ensureInitializedHard_(false);
+}
 
+function ensureInitializedHard_(force){
+  const prop = PropertiesService.getScriptProperties();
+  const inited = prop.getProperty('TT_INIT') === '1';
+  if (inited && !force) return;
+
+  // Pastikan spreadsheet benar-benar bisa dibuka
+  const s = SpreadsheetApp.openById(CONFIG.SHEET_ID);
+
+  // Pastikan semua sheet ada + header lengkap
   ensureHeader(sh(CONFIG.SHEETS.USERS), ['NIK','Nama','Region','Estate','Role','PasswordHash']);
   ensureHeader(sh(CONFIG.SHEETS.VEHICLES), ['Code','Type','Capacity','Driver','Latitude','Longitude','Status','Passengers','Barcode','TripId']);
   ensureHeader(sh(CONFIG.SHEETS.PARTICIPANTS), ['NIK','Nama','Relationship','Region','Estate','Vehicle','Arrived','ArrivalTime','MainNIK','TripId']);
@@ -136,20 +168,34 @@ function ensureInitialized(){
   ensureHeader(sh(CONFIG.SHEETS.SETTINGS), ['Key','Value']);
   ensureHeader(sh(CONFIG.SHEETS.TRIPS), ['TripId','Name','Start','End','Origin','Destination','Status']);
 
-  // Default settings (only if empty)
+  // Default settings jika belum ada
   const setSheet = sh(CONFIG.SHEETS.SETTINGS);
-  if (setSheet.getLastRow() === 1){
-    setSheet.appendRow(['appTitle','Trip Tracker']);
-    setSheet.appendRow(['eventName','Trip Tracker']);
-    setSheet.appendRow(['eventSub','Konfigurasi oleh Admin']);
-    setSheet.appendRow(['orgName','Karyamas Plantation']);
-    setSheet.appendRow(['activeTripId','']);
+  if (setSheet.getLastRow() <= 1){
+    setSheet.getRange(2,1,5,2).setValues([
+      ['appTitle','Trip Tracker'],
+      ['eventName','Trip Tracker'],
+      ['eventSub','Konfigurasi oleh Admin'],
+      ['orgName','Karyamas Plantation'],
+      ['activeTripId','']
+    ]);
   }
 
-  // Ensure there is at least one admin if none exists
+  // Pastikan admin ada (kalau tidak ada admin, buat/perbaiki ADM001)
   const userSheet = sh(CONFIG.SHEETS.USERS);
-  if (userSheet.getLastRow() === 1){
-    userSheet.appendRow(['ADM001','ADMINISTRATOR','HEAD OFFICE','HO','admin', hashPassword(CONFIG.DEFAULT_PASSWORD)]);
+  const users = toObjects(userSheet);
+  const hasAdmin = users.some(u => String(u.Role) === 'admin');
+
+  if (!hasAdmin){
+    const found = findRowBy(userSheet,'NIK','ADM001');
+    if (found.row === -1){
+      userSheet.appendRow(['ADM001','ADMINISTRATOR','HEAD OFFICE','HO','admin', hashPassword(CONFIG.DEFAULT_PASSWORD)]);
+    } else {
+      const headers = found.headers.map(String);
+      const roleCol = headers.indexOf('Role') + 1;
+      const passCol = headers.indexOf('PasswordHash') + 1;
+      userSheet.getRange(found.row, roleCol).setValue('admin');
+      userSheet.getRange(found.row, passCol).setValue(hashPassword(CONFIG.DEFAULT_PASSWORD));
+    }
   }
 
   prop.setProperty('TT_INIT','1');
@@ -167,6 +213,13 @@ function toObjects(sheet){
   }
   return out;
 }
+
+function indexBy(arr, key){
+  const m = {};
+  arr.forEach(o => { m[String(o[key])] = o; });
+  return m;
+}
+
 
 function findRowBy(sheet, colName, value){
   const values = sheet.getDataRange().getValues();
@@ -376,21 +429,55 @@ function getDashboardData(params){
 function getMapData(params){
   const userId = validateSession(params.sessionId);
   if (!userId) return { success:false, message:'Session expired' };
-  const tripId = String(params.tripId||'').trim();
 
-  const vehicles = toObjects(sh(CONFIG.SHEETS.VEHICLES))
-    .filter(v=>!tripId || String(v.TripId||'')===tripId)
-    .map(v=>({
+  const tripId = String(params.tripId||'').trim();
+  const includeManifest = String(params.includeManifest||'0') === '1';
+
+  const vehiclesRaw = toObjects(sh(CONFIG.SHEETS.VEHICLES))
+    .filter(v=>!tripId || String(v.TripId||'')===tripId);
+
+  const participantsRaw = includeManifest
+    ? toObjects(sh(CONFIG.SHEETS.PARTICIPANTS)).filter(p=>!tripId || String(p.TripId||'')===tripId)
+    : [];
+
+  const pByNik = includeManifest ? indexBy(participantsRaw, 'NIK') : {};
+
+  const vehicles = vehiclesRaw.map(v=>{
+    const passengers = v.Passengers ? String(v.Passengers).split(',').map(s=>s.trim()).filter(Boolean) : [];
+    return {
       code: v.Code,
       type: v.Type,
       capacity: v.Capacity,
       driver: v.Driver,
       currentLocation: { lat: v.Latitude, lng: v.Longitude },
       status: v.Status,
-      passengers: v.Passengers ? String(v.Passengers).split(',').map(s=>s.trim()).filter(Boolean) : []
-    }));
+      tripId: v.TripId || '',
+      passengers
+    };
+  });
 
-  return { success:true, vehicles };
+  let manifestByVehicle = undefined;
+
+  if (includeManifest){
+    manifestByVehicle = {};
+    vehicles.forEach(v=>{
+      manifestByVehicle[v.code] = (v.passengers||[]).map(nik=>{
+        const p = pByNik[String(nik)] || {};
+        const arrived = (p.Arrived===true || String(p.Arrived).toLowerCase()==='true');
+        return {
+          nik: String(nik),
+          nama: p.Nama || '-',
+          rel: p.Relationship || '-',
+          region: p.Region || '',
+          estate: p.Estate || '',
+          arrived,
+          arrivedAt: p.ArrivalTime || ''
+        };
+      });
+    });
+  }
+
+  return { success:true, vehicles, manifestByVehicle };
 }
 
 function getVehicles(params){
@@ -628,7 +715,9 @@ function adminUpdate(params){
   if (!userId || !isAdmin(userId)) return { success:false, message:'Akses ditolak' };
 
   const dataType = String(params.dataType||'');
-  const action = String(params.action||'');
+  // ✅ terima op, tapi tetap dukung action lama kalau masih ada
+  const op = String(params.op || params.action || '');
+
   let data = params.data;
   if (typeof data === 'string'){
     try{ data = JSON.parse(data); }catch{}
@@ -636,14 +725,14 @@ function adminUpdate(params){
 
   switch(dataType){
     case 'user':
-      return updateUser(action, data);
+      return updateUser(op, data);
     case 'vehicle':
-      return updateVehicle(action, data);
+      return updateVehicle(op, data);
     case 'config':
       setConfigKV(data || {});
       return { success:true, message:'Config updated' };
     case 'trip':
-      return updateTrip(action, data);
+      return updateTrip(op, data);
     default:
       return { success:false, message:'Tipe data tidak valid' };
   }
@@ -776,3 +865,70 @@ function objectFrom(headers, row){
   headers.forEach((h,i)=> o[h]=row[i]);
   return o;
 }
+
+/************** SETUP TOOLS (RUN ONCE) **************/
+function onOpen(){
+  SpreadsheetApp.getUi()
+    .createMenu('Trip Tracker')
+    .addItem('✅ Setup: Init Sheets', 'SETUP_INIT')
+    .addItem('🔎 Setup: Status Check', 'SETUP_STATUS')
+    .addItem('♻️ Setup: Reset Init Flag', 'SETUP_RESET')
+    .addToUi();
+}
+
+// Jalankan INI pertama kali
+function SETUP_INIT(){
+  ensureInitializedHard_(true); // force init
+  const info = SETUP_STATUS();
+  Logger.log(JSON.stringify(info, null, 2));
+  return info;
+}
+
+function SETUP_STATUS(){
+  const s = SpreadsheetApp.openById(CONFIG.SHEET_ID);
+  const names = s.getSheets().map(x=>x.getName());
+
+  const required = Object.values(CONFIG.SHEETS);
+  const missingSheets = required.filter(n => names.indexOf(n) === -1);
+
+  // cek admin
+  let hasAdmin = false;
+  let adminRow = null;
+  try{
+    const uSheet = s.getSheetByName(CONFIG.SHEETS.USERS);
+    if (uSheet){
+      const rows = uSheet.getDataRange().getValues();
+      const headers = (rows[0]||[]).map(String);
+      const nikIdx = headers.indexOf('NIK');
+      const roleIdx = headers.indexOf('Role');
+      for (let i=1;i<rows.length;i++){
+        if (String(rows[i][roleIdx]) === 'admin'){
+          hasAdmin = true;
+          adminRow = rows[i][nikIdx];
+          break;
+        }
+      }
+    }
+  }catch(e){}
+
+  const result = {
+    spreadsheetName: s.getName(),
+    spreadsheetUrl: s.getUrl(),
+    sheetNames: names,
+    missingSheets,
+    hasAdmin,
+    sampleAdminNik: adminRow,
+    TT_INIT: PropertiesService.getScriptProperties().getProperty('TT_INIT')
+  };
+
+  Logger.log(JSON.stringify(result, null, 2));
+  return result;
+}
+
+// kalau TT_INIT sudah 1 tapi sheet belum kebentuk, jalankan ini dulu
+function SETUP_RESET(){
+  PropertiesService.getScriptProperties().deleteProperty('TT_INIT');
+  Logger.log('TT_INIT reset');
+  return { success:true, message:'TT_INIT reset' };
+}
+

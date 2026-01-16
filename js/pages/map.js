@@ -1,9 +1,21 @@
 import * as api from '../core/api.js';
-import { showNotification } from '../core/ui.js';
+import { showNotification, ensureMapTrackingUI, setMapTrackingButtons, setTrackVehicleOptionsUI } from '../core/ui.js';
 
 let map = null;
 let vehicleMarkers = {};
 let lastManifestByVehicle = {};
+let mapHasFittedOnce = false;
+let invalidatedOnce = false;
+
+if (!invalidatedOnce){
+  invalidatedOnce = true;
+  setTimeout(() => { try { map.invalidateSize(true); } catch {} }, 0);
+}
+
+// cache untuk mencegah fetch manifest berulang
+let manifestLoadedAt = {}; // { [vehicleCode]: timestamp }
+let manifestLoading = {};  // { [vehicleCode]: true/false }
+
 let tracking = {
   watchId: null,
   timer: null,
@@ -34,14 +46,40 @@ function ensureDrawer(){
   document.getElementById('vdClose')?.addEventListener('click', ()=> d.classList.remove('open'));
 }
 
-function openDrawer(code){
+async function openDrawer(code, session){
   ensureDrawer();
   const d = document.getElementById('vehicleDrawer');
   d.classList.add('open');
 
+  // tampilkan placeholder dulu biar tidak freeze
+  document.getElementById('vdTitle').textContent = `Kendaraan ${code}`;
+  document.getElementById('vdSub').textContent = `Memuat manifest...`;
+  document.getElementById('vdPills').innerHTML = '';
+  document.getElementById('vdList').innerHTML = `<div class="vd-item"><div class="mt">Memuat data penumpang...</div></div>`;
+
+  // kalau manifest sudah ada di cache, render cepat
+  if (Array.isArray(lastManifestByVehicle[code])) {
+    renderDrawer(code);
+    return;
+  }
+
+  // kalau belum ada: ambil manifest on-demand (sekali saja)
+  try{
+    await ensureManifestForVehicle(session, code);
+  }catch(e){
+    document.getElementById('vdSub').textContent = `Gagal memuat manifest`;
+    document.getElementById('vdList').innerHTML =
+      `<div class="vd-item"><div class="mt">${esc(e?.message || 'Gagal memuat')}</div></div>`;
+    return;
+  }
+
+  renderDrawer(code);
+}
+
+function renderDrawer(code){
   const list = lastManifestByVehicle[code] || [];
   const total = list.length;
-  const staff = list.filter(p => String(p.rel||'').toLowerCase()==='staff' || String(p.rel||'').toLowerCase()==='mentee' || String(p.rel||'').toLowerCase()==='karyawan').length;
+  const staff = list.filter(p => ['staff','mentee','karyawan'].includes(String(p.rel||'').toLowerCase())).length;
   const istri = list.filter(p => String(p.rel||'').toLowerCase()==='istri').length;
   const anak  = list.filter(p => String(p.rel||'').toLowerCase()==='anak').length;
 
@@ -66,6 +104,32 @@ function openDrawer(code){
   document.getElementById('vdList').innerHTML = html;
 }
 
+async function ensureManifestForVehicle(session, code){
+  if (!session) throw new Error('Session tidak ada');
+
+  // sudah pernah diload dan masih fresh 60 detik, skip
+  const ts = manifestLoadedAt[code] || 0;
+  if (lastManifestByVehicle[code] && (Date.now() - ts < 60000)) return;
+
+  if (manifestLoading[code]) return; // sedang loading, biarkan
+  manifestLoading[code] = true;
+
+  try{
+    const tripId = session?.activeTripId || '';
+    // ⚠️ backend Anda saat ini hanya punya getMapData(includeManifest=1) untuk semua kendaraan.
+    // Ini tetap berat, tapi hanya terjadi saat user klik 1 kendaraan (bukan saat buka map).
+    const res = await api.getMapData(session.sessionId, tripId, 1);
+
+    lastManifestByVehicle = res.manifestByVehicle || {};
+    manifestLoadedAt = manifestLoadedAt || {};
+    Object.keys(lastManifestByVehicle).forEach(k=> manifestLoadedAt[k] = Date.now());
+
+    if (!lastManifestByVehicle[code]) lastManifestByVehicle[code] = [];
+  } finally {
+    manifestLoading[code] = false;
+  }
+}
+
 function esc(s){
   return String(s??'')
     .replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;')
@@ -86,62 +150,75 @@ function fixLeafletAfterVisible(){
   setTimeout(()=>{ try{ map.invalidateSize(true); }catch{} }, 50);
 }
 
+function prepareTrackingUI(session){
+  ensureMapTrackingUI({
+    onStart: () => startTracking(session),
+    onStop:  () => stopTracking()
+  });
+}
+
 export function initMap(){
   const el = document.getElementById('map');
   if (!el) return;
 
-  ensureMapSize();
-
-  if (map){
-    fixLeafletAfterVisible();
+  // Defensive: pastikan Leaflet sudah ter-load
+  if (typeof window.L === 'undefined'){
+    try{ showNotification('Leaflet belum ter-load. Pastikan libs/leaflet/leaflet.js dipanggil sebelum js/app.js', 'error'); }catch{}
     return;
   }
 
-  map = L.map(el, { zoomControl:true, preferCanvas:true }).setView([-2.5, 114.0], 5);
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    maxZoom: 19, attribution: '© OpenStreetMap'
-  }).addTo(map);
+  // Pastikan ukuran map tidak 0 ketika pertama kali dibuka (Leaflet butuh element visible)
+  const tryInit = (attempt = 0) => {
+    ensureMapSize();
+    const r = el.getBoundingClientRect();
+    if (r.width < 10 || r.height < 10){
+      if (attempt < 12){
+        requestAnimationFrame(()=> tryInit(attempt + 1));
+      } else {
+        try{ showNotification('Map container belum punya ukuran (width/height = 0). Cek CSS #map / parent container.', 'error'); }catch{}
+      }
+      return;
+    }
 
-  window.addEventListener('resize', fixLeafletAfterVisible, { passive:true });
-  window.visualViewport?.addEventListener('resize', fixLeafletAfterVisible, { passive:true });
+    if (map){
+      fixLeafletAfterVisible();
+      return;
+    }
 
-  fixLeafletAfterVisible();
-  ensureDrawer();
-}
+    // Prefer default renderer dulu (lebih kompatibel daripada preferCanvas di beberapa device)
+    map = L.map(el, { zoomControl:true, preferCanvas:false, updateWhenIdle:true }).setView([-2.5, 114.0], 5);
 
-// ==== Tracking GPS -> updateLocation ====
-export function ensureTrackingUI(session){
-  const page = document.getElementById('mapPage');
-  if (!page) return;
+    const tiles = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '© OpenStreetMap',
+      crossOrigin: true,
+      // ✅ supaya tidak menggantung lama
+      timeout: 8000,          // 8 detik
+      updateWhenIdle: true,
+      keepBuffer: 2
+    });
 
-  if (document.getElementById('trackBar')) return;
+    let tileErrOnce = false;
+    tiles.on('tileerror', () => {
+      if (tileErrOnce) return;
+      tileErrOnce = true;
+      try{ showNotification('Tile map gagal dimuat. Cek koneksi / DNS / firewall yang memblokir OpenStreetMap.', 'error'); }catch{}
+    });
 
-  const bar = document.createElement('div');
-  bar.id = 'trackBar';
-  bar.className = 'map-trackbar';
-  bar.innerHTML = `
-    <button class="btn-primary" id="btnStartTrack"><i class="fas fa-location-arrow"></i> Mulai Kirim Lokasi</button>
-    <button class="btn-secondary" id="btnStopTrack" disabled><i class="fas fa-stop"></i> Stop</button>
-    <select id="trackVehiclePick" style="padding:12px 15px; border:2px solid #ddd; border-radius:8px;">
-      <option value="">Pilih kendaraan untuk tracking...</option>
-    </select>
-  `;
+    tiles.addTo(map);
 
-  // tempatkan di atas map container
-  const mapContainer = page.querySelector('.map-container');
-  mapContainer?.parentNode?.insertBefore(bar, mapContainer);
+    window.addEventListener('resize', fixLeafletAfterVisible, { passive:true });
+    window.visualViewport?.addEventListener('resize', fixLeafletAfterVisible, { passive:true });
 
-  document.getElementById('btnStartTrack').addEventListener('click', ()=> startTracking(session));
-  document.getElementById('btnStopTrack').addEventListener('click', stopTracking);
-}
+    // invalidateSize beberapa kali agar stabil setelah transisi/animasi UI
+    fixLeafletAfterVisible();
+    setTimeout(fixLeafletAfterVisible, 200);
+    setTimeout(fixLeafletAfterVisible, 600);
 
-function setTrackVehicleOptions(vehicles){
-  const sel = document.getElementById('trackVehiclePick');
-  if (!sel) return;
-  const cur = sel.value;
-  const opts = vehicles.map(v=> `<option value="${esc(v.code)}">${esc(v.code)} • ${esc(v.type||'')} • ${esc(v.status||'')}</option>`).join('');
-  sel.innerHTML = `<option value="">Pilih kendaraan untuk tracking...</option>${opts}`;
-  if (cur) sel.value = cur;
+    ensureDrawer();
+  };
+
+  tryInit(0);
 }
 
 function startTracking(session){
@@ -177,8 +254,7 @@ function startTracking(session){
     }catch(e){}
   }, 1200);
 
-  document.getElementById('btnStartTrack').disabled = true;
-  document.getElementById('btnStopTrack').disabled = false;
+  setMapTrackingButtons(true);
   showNotification('Kirim lokasi aktif untuk ' + tracking.vehicleCode, 'success');
 }
 
@@ -193,10 +269,7 @@ function stopTracking(){
   }
   tracking._lastPos = null;
 
-  const s = document.getElementById('btnStartTrack');
-  const t = document.getElementById('btnStopTrack');
-  if (s) s.disabled = false;
-  if (t) t.disabled = true;
+  setMapTrackingButtons(false);
 
   showNotification('Kirim lokasi dihentikan', 'info');
 }
@@ -240,62 +313,108 @@ function updateMarkerIcon(marker, code, status){
 }
 
 // ==== Refresh Map ====
-export async function refreshMap(session){
-  if (!map) initMap();
-  fixLeafletAfterVisible();
+export async function refreshMap(session, { includeManifest = 0, fitMode = 'none' } = {}){
+  try{
+    if (!map) initMap();
+    if (!map) return;
 
-  const tripId = session?.activeTripId || '';
-  const res = await api.getMapData(session.sessionId, tripId, 1); // includeManifest=1
-  const vehicles = res.vehicles || [];
-  lastManifestByVehicle = res.manifestByVehicle || {};
+    fixLeafletAfterVisible();
 
-  ensureTrackingUI(session);
-  setTrackVehicleOptions(vehicles);
+    const tripId = session?.activeTripId || '';
 
-  const seen = new Set();
-  vehicles.forEach(v=>{
-    const lat = Number(v.currentLocation?.lat);
-    const lng = Number(v.currentLocation?.lng);
-    if (!isFinite(lat) || !isFinite(lng)) return;
-    const code = v.code;
-    seen.add(code);
+    // ✅ default: includeManifest=0 agar tidak freeze
+    const res = await api.getMapData(session.sessionId, tripId, includeManifest ? 1 : 0);
 
-    let marker = vehicleMarkers[code];
-    const label = `${code} (${v.type||''}) - ${v.status||''}`;
+    const vehicles = res.vehicles || [];
 
-    if (!marker){
-      marker = L.marker([lat,lng], {
-        icon: makeVehicleDivIcon(code, v.status)
-      }).addTo(map);
+    // hanya update manifest cache kalau memang diminta
+    if (includeManifest) {
+      lastManifestByVehicle = res.manifestByVehicle || {};
+      Object.keys(lastManifestByVehicle).forEach(k=> manifestLoadedAt[k] = Date.now());
+    }
 
-      marker.on('click', ()=> openDrawer(code));
-      vehicleMarkers[code] = marker;
+    prepareTrackingUI(session);
+
+    // setelah trackbar muncul, invalidate sekali biar leaflet resize clean
+    setTimeout(() => { try { map.invalidateSize(true); } catch {} }, 0);
+
+    setTrackVehicleOptionsUI(vehicles, { keepValue: true });
+
+
+    const seen = new Set();
+    for (const v of vehicles){
+      const lat = Number(v.currentLocation?.lat);
+      const lng = Number(v.currentLocation?.lng);
+      if (!isFinite(lat) || !isFinite(lng)) continue;
+
+      const code = v.code;
+      seen.add(code);
+
+      let marker = vehicleMarkers[code];
+      const label = `${code} (${v.type||''}) - ${v.status||''}`;
+
+      if (!marker){
+        marker = L.marker([lat,lng], {
+          icon: makeVehicleDivIcon(code, v.status)
+        }).addTo(map);
+
+        // ✅ klik marker: buka drawer & load manifest on-demand
+        marker.on('click', ()=> openDrawer(code, session));
+
+        // ✅ bindPopup sekali saja
+        marker.bindPopup(label);
+
+        vehicleMarkers[code] = marker;
+      } else {
+        marker.setLatLng([lat,lng]);
+        updateMarkerIcon(marker, code, v.status);
+
+        // update isi popup tanpa re-bind (lebih ringan)
+        const p = marker.getPopup();
+        if (p) p.setContent(label);
+      }
+    }
+
+    // hapus marker yang sudah tidak ada
+    Object.keys(vehicleMarkers).forEach(code=>{
+      if (!seen.has(code)){
+        map.removeLayer(vehicleMarkers[code]);
+        delete vehicleMarkers[code];
+      }
+    });
+
+    // ✅ fit bounds: jangan tiap refresh
+    if (fitMode === 'first' && !mapHasFittedOnce){
+    const coords = vehicles
+      .map(v=>[Number(v.currentLocation?.lat), Number(v.currentLocation?.lng)])
+      .filter(([lat,lng]) =>
+        Number.isFinite(lat) && Number.isFinite(lng) &&
+        lat >= -90 && lat <= 90 &&
+        lng >= -180 && lng <= 180
+      );
+
+    if (coords.length){
+      try{
+        const bounds = L.latLngBounds(coords);
+
+        // ✅ guard: kalau bounds aneh, jangan fitBounds
+        if (bounds.isValid()){
+          map.fitBounds(bounds, { padding:[20,20], maxZoom: 13 });
+          mapHasFittedOnce = true;
+        }
+      }catch(e){
+        // kalau ada kasus bounds berat, skip saja (peta tetap tampil)
+        mapHasFittedOnce = true;
+      }
     } else {
-      marker.setLatLng([lat,lng]);
-
-      // ✅ update warna kalau status berubah
-      updateMarkerIcon(marker, code, v.status);
+      // tidak ada koordinat valid: jangan fit
+      mapHasFittedOnce = true;
     }
-
-    marker.bindPopup(label);
-
-  });
-
-  Object.keys(vehicleMarkers).forEach(code=>{
-    if (!seen.has(code)){
-      map.removeLayer(vehicleMarkers[code]);
-      delete vehicleMarkers[code];
-    }
-  });
-
-  const coords = vehicles
-    .map(v=>[Number(v.currentLocation?.lat), Number(v.currentLocation?.lng)])
-    .filter(([a,b])=>isFinite(a)&&isFinite(b));
-
-  if (coords.length){
-    const bounds = L.latLngBounds(coords);
-    map.fitBounds(bounds, { padding:[20,20], maxZoom: 13 });
   }
 
-  fixLeafletAfterVisible();
+    fixLeafletAfterVisible();
+  }catch(err){
+    try{ showNotification(err?.message || 'Gagal memuat peta', 'error'); }catch{}
+    console.error(err);
+  }
 }

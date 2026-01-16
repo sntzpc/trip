@@ -257,14 +257,20 @@ window.showMap = async ()=>{
   showPage('mapPage');
   closeSidebarOnMobile();
 
-  // ✅ penting: tunggu DOM/layout settle dulu baru initMap
-  requestAnimationFrame(() => initMap());
+  // ✅ tunggu halaman map benar-benar tampil & layout settle
+  await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+
+  initMap(); // init cepat dulu
 
   if (!State.session) return;
-  await refreshMap(State.session);
+
+  // ✅ refresh ringan dulu (tanpa manifest + fitBounds hanya pertama)
+  await refreshMap(State.session, { includeManifest: 0, fitMode: 'first' });
 
   if (State.mapTimer) clearInterval(State.mapTimer);
-  State.mapTimer = setInterval(()=> refreshMap(State.session).catch(()=>{}), 20000);
+  State.mapTimer = setInterval(()=>{
+    refreshMap(State.session, { includeManifest: 0, fitMode: 'none' }).catch(()=>{});
+  }, 30000);
 };
 
 window.showArrival = async ()=>{

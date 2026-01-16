@@ -116,10 +116,6 @@ export async function getDashboard(sessionId, tripId){
   return apiCall('getDashboardData', { sessionId, tripId }, { method: 'GET' });
 }
 
-export async function getMapData(sessionId, tripId){
-  return apiCall('getMapData', { sessionId, tripId }, { method: 'GET' });
-}
-
 export async function getVehicles(sessionId, tripId, q){
   return apiCall('getVehicles', { sessionId, tripId, q }, { method: 'GET' });
 }

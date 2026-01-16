@@ -4,6 +4,253 @@ import { createTablePager } from '../core/table_pager.js';
 
 let arrivedPager = null;
 
+// ===== Drilldown modal (STEP: Region -> Unit -> Table) =====
+let drill = null;
+
+function ensureDrillModal(){
+  if (drill) return drill;
+
+  const wrap = document.createElement('div');
+  wrap.id = 'dashDrillModal';
+  wrap.style.position = 'fixed';
+  wrap.style.inset = '0';
+  wrap.style.zIndex = '5000';
+  wrap.style.display = 'none';
+  wrap.style.background = 'rgba(0,0,0,.45)';
+  wrap.style.backdropFilter = 'blur(2px)';
+
+  wrap.innerHTML = `
+    <div style="position:absolute; inset:12px; max-width:1100px; margin:auto; background:#fff; border-radius:16px; overflow:hidden; box-shadow:0 12px 30px rgba(0,0,0,.18); display:flex; flex-direction:column;">
+      <div style="display:flex; align-items:center; justify-content:space-between; padding:12px 14px; border-bottom:1px solid #eee;">
+        <div>
+          <div id="ddTitle" style="font-weight:900; font-size:16px;">Detail</div>
+          <div id="ddSub" style="font-size:12px; color:#666; margin-top:2px;">—</div>
+        </div>
+        <div style="display:flex; gap:8px; align-items:center;">
+          <button id="ddBack" type="button" style="display:none; padding:10px 12px; border:2px solid #ddd; border-radius:10px; background:#fff; font-weight:800; cursor:pointer;">Kembali</button>
+          <button id="ddClose" type="button" style="padding:10px 12px; border:2px solid #ddd; border-radius:10px; background:#fff; font-weight:800; cursor:pointer;">Tutup</button>
+        </div>
+      </div>
+
+      <div style="padding:12px; flex:1; min-height:0;">
+        <!-- STEP CARDS -->
+        <div id="ddCardsWrap" style="display:grid; grid-template-columns:repeat(auto-fill, minmax(200px, 1fr)); gap:10px; overflow:auto; max-height:240px; padding:4px;">
+        </div>
+
+        <!-- TABLE (muncul di step 2) -->
+        <div id="ddTableBlock" style="display:none; margin-top:12px; border:1px solid #eee; border-radius:14px; overflow:hidden; min-height:0;">
+          <div style="padding:10px 12px; font-weight:900; border-bottom:1px solid #eee;">Daftar Peserta</div>
+          <div class="participant-table-container" id="ddTableWrap" style="padding:10px; min-height:0;">
+            <table class="participant-table" style="width:100%;">
+              <thead>
+                <tr>
+                  <th style="width:64px;">No.</th>
+                  <th>Nama</th>
+                  <th>NIK</th>
+                  <th>Hubungan</th>
+                  <th style="width:160px;">Kendaraan</th>
+                </tr>
+              </thead>
+              <tbody id="ddTbody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+
+  // close by backdrop click
+  wrap.addEventListener('click', (e)=>{
+    if (e.target === wrap) hideDrill();
+  });
+
+  document.body.appendChild(wrap);
+  wrap.querySelector('#ddClose').addEventListener('click', hideDrill);
+
+  drill = {
+    el: wrap,
+    titleEl: wrap.querySelector('#ddTitle'),
+    subEl: wrap.querySelector('#ddSub'),
+    backBtn: wrap.querySelector('#ddBack'),
+    cardsWrap: wrap.querySelector('#ddCardsWrap'),
+    tableBlock: wrap.querySelector('#ddTableBlock'),
+    tableWrap: wrap.querySelector('#ddTableWrap'),
+    tbodyEl: wrap.querySelector('#ddTbody'),
+    pager: null,
+
+    // state
+    step: 0,           // 0=region cards, 1=unit cards, 2=table
+    titleBase: 'Detail',
+    all: [],
+    selectedRegion: '',
+    selectedUnit: ''
+  };
+
+  drill.backBtn.addEventListener('click', ()=>{
+    if (drill.step === 2){
+      drill.step = 1; // balik ke unit cards
+      drill.selectedUnit = '';
+      renderDrill();
+      return;
+    }
+    if (drill.step === 1){
+      drill.step = 0; // balik ke region cards
+      drill.selectedRegion = '';
+      renderDrill();
+      return;
+    }
+  });
+
+  return drill;
+}
+
+function showDrill(title, list){
+  ensureDrillModal();
+  drill.titleBase = title;
+  drill.titleEl.textContent = title;
+  drill.subEl.textContent = '—';
+
+  drill.all = Array.isArray(list) ? list : [];
+  drill.step = 0;
+  drill.selectedRegion = '';
+  drill.selectedUnit = '';
+
+  drill.el.style.display = 'block';
+  renderDrill();
+}
+
+function hideDrill(){
+  if (!drill) return;
+  drill.el.style.display = 'none';
+}
+
+// ---------- Card helpers ----------
+function groupCount(list, keyFn){
+  const m = {};
+  for (const x of list){
+    const k = String(keyFn(x) || 'Unknown').trim() || 'Unknown';
+    m[k] = (m[k] || 0) + 1;
+  }
+  return m;
+}
+
+function cardHtml(label, count, sub=''){
+  return `
+    <button type="button"
+      style="
+        text-align:left;
+        padding:12px 12px;
+        border:2px solid #eee;
+        border-radius:14px;
+        background:#fff;
+        cursor:pointer;
+        font-weight:900;
+        box-shadow:0 4px 10px rgba(0,0,0,.06);
+      ">
+      <div style="display:flex; justify-content:space-between; gap:10px; align-items:center;">
+        <div style="min-width:0;">
+          <div style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(label)}</div>
+          ${sub ? `<div style="font-size:12px; font-weight:700; color:#666; margin-top:2px;">${escapeHtml(sub)}</div>` : ``}
+        </div>
+        <div style="background:#ecf0f1; padding:6px 12px; border-radius:999px; font-size:12px; font-weight:900;">${count}</div>
+      </div>
+    </button>
+  `;
+}
+
+function renderCards(items, onClick){
+  // items: [{label,count,sub,dataKey}]
+  drill.cardsWrap.innerHTML = items.map(it => cardHtml(it.label, it.count, it.sub)).join('')
+    || `<div style="color:#777;padding:8px;">Tidak ada data.</div>`;
+
+  Array.from(drill.cardsWrap.querySelectorAll('button')).forEach((btn, idx)=>{
+    btn.addEventListener('click', ()=> onClick(items[idx]));
+  });
+}
+
+// ---------- Drill renderer ----------
+function renderDrill(){
+  if (!drill) return;
+
+  const all = drill.all || [];
+  const step = drill.step;
+
+  // Back button state
+  drill.backBtn.style.display = (step === 0) ? 'none' : 'inline-block';
+
+  // Hide table by default
+  drill.tableBlock.style.display = (step === 2) ? '' : 'none';
+
+  if (step === 0){
+    // REGION cards
+    drill.titleEl.textContent = drill.titleBase;
+    const byRegion = groupCount(all, p => p.Region);
+    const regions = Object.entries(byRegion)
+      .sort((a,b)=>b[1]-a[1])
+      .map(([label,count])=>({ label, count, sub:'Klik untuk lihat Unit', key: label }));
+
+    drill.subEl.textContent = `${all.length} peserta • pilih Region`;
+    renderCards(regions, (it)=>{
+      drill.selectedRegion = it.key;
+      drill.step = 1;
+      renderDrill();
+    });
+    return;
+  }
+
+  if (step === 1){
+    // UNIT cards in selected region
+    const region = drill.selectedRegion || '';
+    const inRegion = all.filter(p => String(p.Region||'Unknown') === String(region));
+
+    drill.titleEl.textContent = `${drill.titleBase} • ${region}`;
+    drill.subEl.textContent = `${inRegion.length} peserta • pilih Unit`;
+
+    const byUnit = groupCount(inRegion, p => p.Estate);
+    const units = Object.entries(byUnit)
+      .sort((a,b)=>b[1]-a[1])
+      .map(([label,count])=>({ label, count, sub:'Klik untuk lihat daftar peserta', key: label }));
+
+    renderCards(units, (it)=>{
+      drill.selectedUnit = it.key;
+      drill.step = 2;
+      renderDrill();
+    });
+    return;
+  }
+
+  // step === 2 => TABLE
+  const region = drill.selectedRegion || '';
+  const unit = drill.selectedUnit || '';
+
+  const inRegion = all.filter(p => String(p.Region||'Unknown') === String(region));
+  const inUnit = inRegion.filter(p => String(p.Estate||'Unknown') === String(unit));
+
+  drill.titleEl.textContent = `${drill.titleBase} • ${region} • ${unit}`;
+  drill.subEl.textContent = `${inUnit.length} peserta`;
+
+  // ensure pager
+  if (!drill.pager){
+    drill.pager = createTablePager({
+      containerEl: drill.tableWrap,
+      tbodyEl: drill.tbodyEl,
+      searchPlaceholder: 'Cari nama / NIK / hubungan / kendaraan...',
+      getRowText: (p)=> `${p.Nama||''} ${p.NIK||''} ${p.Relationship||p.Category||''} ${p.Vehicle||''}`,
+      renderRowHtml: (p, idx)=> `
+        <tr>
+          <td>${idx}</td>
+          <td>${escapeHtml(p.Nama||'-')}</td>
+          <td>${escapeHtml(p.NIK||'-')}</td>
+          <td>${escapeHtml(p.Relationship||p.Category||'-')}</td>
+          <td>${escapeHtml(p.Vehicle||'-')}</td>
+        </tr>
+      `
+    });
+  }
+  drill.pager.setData(inUnit);
+}
+
+// ===== Main Dashboard =====
 export async function loadDashboard(session){
   const tripId = session?.activeTripId || '';
 
@@ -16,7 +263,9 @@ export async function loadDashboard(session){
   $('#totalOnRoad').textContent = d.totalOnRoad||0;
 
   renderBreakdown(d.breakdown || {});
-  await renderArrivedTable(session); // ✅ baru
+  await renderArrivedTable(session);
+
+  bindStatCardClicks(session);
 }
 
 function renderBreakdown(breakdown){
@@ -61,13 +310,17 @@ async function renderArrivedTable(session){
     arrivedPager = createTablePager({
       containerEl: container,
       tbodyEl: tbody,
-      searchPlaceholder: 'Cari nama / NIK / kendaraan / hubungan...',
-      getRowText: (p)=> `${p.Nama||''} ${p.NIK||''} ${p.Vehicle||''} ${p.Relationship||''} ${p.Region||''} ${p.Estate||''}`,
-      renderRowHtml: (p)=> {
+      searchPlaceholder: 'Cari nama / NIK / hubungan / region / unit / kendaraan...',
+      getRowText: (p)=> `${p.Nama||''} ${p.NIK||''} ${p.Relationship||''} ${p.Region||''} ${p.Estate||''} ${p.Vehicle||''}`,
+      renderRowHtml: (p, idx)=> {
         return `
           <tr>
+            <td>${idx}</td>
             <td>${escapeHtml(p.Nama||'-')}</td>
             <td>${escapeHtml(p.NIK||'-')}</td>
+            <td>${escapeHtml(p.Relationship||p.Category||'-')}</td>
+            <td>${escapeHtml(p.Region||'-')}</td>
+            <td>${escapeHtml(p.Estate||'-')}</td>
             <td>${escapeHtml(p.Vehicle||'-')}</td>
             <td>${fmtDt(p.ArrivalTime||'-')}</td>
             <td><span class="badge success">Tiba</span></td>
@@ -87,7 +340,67 @@ function fmtDt(v){
   }catch{ return String(v||'-'); }
 }
 
-// ===== Region details (Anda sudah punya) =====
+// ===== Klik kartu stats -> Drill step-by-step (Region cards -> Unit cards -> Table) =====
+async function bindStatCardClicks(session){
+  const cards = document.querySelectorAll('.stats-cards .stat-card');
+  if (!cards || cards.length < 4) return;
+
+  async function fetchAllParticipants(){
+    const tripId = session?.activeTripId || '';
+    const res = await api.getParticipants(session.sessionId, tripId, 'all');
+    return res.participants || [];
+  }
+
+  async function fetchVehiclesMap(){
+    const tripId = session?.activeTripId || '';
+    const vRes = await api.adminGet(session.sessionId, 'vehicles', tripId);
+    const vehicles = vRes.vehicles || [];
+    const m = {};
+    vehicles.forEach(v=>{ m[String(v.Code)] = String(v.Status||''); });
+    return m;
+  }
+
+  // helper bind once
+  const bindOnce = (el, fn)=>{
+    if (!el || el.dataset.ddHooked) return;
+    el.dataset.ddHooked = '1';
+    el.style.cursor = 'pointer';
+    el.addEventListener('click', fn);
+  };
+
+  // 0: Total Peserta
+  bindOnce(cards[0], async ()=>{
+    const parts = await fetchAllParticipants();
+    showDrill('Total Peserta', parts);
+  });
+
+  // 1: Kendaraan (yang sudah punya Vehicle)
+  bindOnce(cards[1], async ()=>{
+    const parts = await fetchAllParticipants();
+    const subset = parts.filter(p=> String(p.Vehicle||'').trim());
+    showDrill('Peserta Terkait Kendaraan', subset);
+  });
+
+  // 2: Telah Tiba
+  bindOnce(cards[2], async ()=>{
+    const parts = await fetchAllParticipants();
+    const subset = parts.filter(p => (p.Arrived===true || String(p.Arrived).toLowerCase()==='true'));
+    showDrill('Peserta Telah Tiba', subset);
+  });
+
+  // 3: Dalam Perjalanan (kendaraan on_the_way)
+  bindOnce(cards[3], async ()=>{
+    const [parts, vmap] = await Promise.all([fetchAllParticipants(), fetchVehiclesMap()]);
+    const subset = parts.filter(p=>{
+      const vc = String(p.Vehicle||'').trim();
+      if (!vc) return false;
+      return String(vmap[vc]||'').toLowerCase() === 'on_the_way';
+    });
+    showDrill('Peserta Dalam Perjalanan', subset);
+  });
+}
+
+// ===== Region details lama (tetap) =====
 export async function showRegionDetailsUI(session){
   const tripId = session?.activeTripId || '';
   const res = await api.getParticipants(session.sessionId, tripId, 'all');
@@ -115,62 +428,6 @@ export function hideRegionDetailsUI(){
   const pane = document.getElementById('regionDetails');
   if (pane) pane.style.display = 'none';
 }
-
-// ===== Vehicle details (NEW) =====
-// Dipanggil dari app.js via window.showVehicleDetails()
-export async function showVehicleDetailsUI(session){
-  const tripId = session?.activeTripId || '';
-
-  // ambil kendaraan + peserta untuk hitung arrived per kendaraan
-  const vRes = await api.adminGet(session.sessionId, 'vehicles', tripId);
-  const pRes = await api.getParticipants(session.sessionId, tripId, 'all');
-
-  const vehicles = vRes.vehicles || [];
-  const parts = pRes.participants || [];
-
-  const arrivedByNik = {};
-  parts.forEach(p=>{
-    const arrived = (p.Arrived===true || String(p.Arrived).toLowerCase()==='true');
-    arrivedByNik[String(p.NIK)] = arrived;
-  });
-
-  const pane = document.getElementById('vehicleDetails');
-  const listEl = document.getElementById('vehicleList');
-  if (!pane || !listEl) return;
-
-  // render kartu kendaraan
-  listEl.innerHTML = vehicles.map(v=>{
-    const passengers = String(v.Passengers||'').split(',').map(s=>s.trim()).filter(Boolean);
-    const total = passengers.length;
-    const arrivedCount = passengers.filter(n=> arrivedByNik[String(n)]).length;
-
-    return `
-      <div class="vehicle-card" style="background: var(--light-color); border-left:4px solid var(--secondary-color);">
-        <h4>${escapeHtml(v.Code||'-')} <small style="color:#666;font-weight:600;">(${escapeHtml(v.Type||'')})</small></h4>
-        <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:8px;">
-          <span class="vehicle-status status-waiting">Status: ${escapeHtml(v.Status||'')}</span>
-          <span class="vehicle-status status-arrived">Tiba: ${arrivedCount}/${total}</span>
-          <span class="vehicle-status status-ontheway">Kapasitas: ${escapeHtml(v.Capacity||'-')}</span>
-        </div>
-        <div style="margin-top:10px; color:#555; font-size:13px;">
-          Driver: <b>${escapeHtml(v.Driver||'-')}</b><br/>
-          TripId: <b>${escapeHtml(v.TripId||'-')}</b>
-        </div>
-      </div>
-    `;
-  }).join('') || `<p class="empty-text">Belum ada kendaraan.</p>`;
-
-  pane.style.display = '';
-}
-
-export function hideVehicleDetailsUI(){
-  const pane = document.getElementById('vehicleDetails');
-  if (pane) pane.style.display = 'none';
-}
-
-// expose untuk app.js
-window.__showVehicleDetailsUI = showVehicleDetailsUI;
-window.__hideVehicleDetailsUI = hideVehicleDetailsUI;
 
 function escapeHtml(str){
   return String(str ?? '')

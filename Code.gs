@@ -220,6 +220,91 @@ function indexBy(arr, key){
   return m;
 }
 
+// ==========================
+// ✅ Helpers: normalisasi & dedupe (anti double-count)
+// ==========================
+
+function normalizeRelKey_(rel){
+  const s = String(rel || '').trim().toLowerCase();
+  if (!s) return 'lainnya';
+  // normalisasi variasi
+  if (['karyawan','staff','pegawai','employee'].includes(s)) return 'staff';
+  if (['mentee','magang','training','peserta','participant'].includes(s)) return 'mentee';
+  if (['istri','wife'].includes(s)) return 'istri';
+  if (['suami','husband'].includes(s)) return 'suami';
+  if (['anak','child'].includes(s)) return 'anak';
+  if (['ayah','bapak','father'].includes(s)) return 'ayah';
+  if (['ibu','mother','mama'].includes(s)) return 'ibu';
+  return s;
+}
+
+function isFamilyRel_(rel){
+  const k = normalizeRelKey_(rel);
+  return ['istri','suami','anak','ayah','ibu','keluarga','family'].includes(k);
+}
+
+// Dedupe peserta berdasarkan NIK (+ tripId jika diberikan)
+// Jika ada duplikasi baris, pilih baris yang:
+// 1) Arrived=true menang
+// 2) ArrivalTime paling baru menang
+function dedupeParticipants_(rows, tripId){
+  const list = (rows || []).filter(p=>!tripId || String(p.TripId||'')===String(tripId));
+  const m = {};
+  list.forEach(p=>{
+    const nik = String(p.NIK||'').trim();
+    if (!nik) return;
+    const prev = m[nik];
+    if (!prev){ m[nik] = p; return; }
+
+    const a1 = (p.Arrived===true || String(p.Arrived).toLowerCase()==='true');
+    const a0 = (prev.Arrived===true || String(prev.Arrived).toLowerCase()==='true');
+    if (a1 && !a0){ m[nik] = p; return; }
+    if (a1 === a0){
+      const t1 = safeTime_(p.ArrivalTime);
+      const t0 = safeTime_(prev.ArrivalTime);
+      if (t1 > t0){ m[nik] = p; return; }
+    }
+  });
+  return Object.keys(m).map(k=>m[k]);
+}
+
+function safeTime_(v){
+  try{
+    const t = new Date(v).getTime();
+    return isFinite(t) ? t : 0;
+  }catch(e){
+    return 0;
+  }
+}
+
+function getArrivedNikSet_(tripId){
+  const set = new Set();
+  const parts = dedupeParticipants_(toObjects(sh(CONFIG.SHEETS.PARTICIPANTS)), tripId);
+  parts.forEach(p=>{
+    const nik = String(p.NIK||'').trim();
+    if (!nik) return;
+    const arrived = (p.Arrived===true || String(p.Arrived).toLowerCase()==='true');
+    if (arrived) set.add(nik);
+  });
+  return set;
+}
+
+function getArrivalsNikSet_(tripId){
+  const set = new Set();
+  const sheet = sh(CONFIG.SHEETS.ARRIVALS);
+  const values = sheet.getDataRange().getValues();
+  if (values.length < 2) return set;
+  const headers = values[0].map(String);
+  const nikIdx = headers.indexOf('NIK');
+  const tripIdx = headers.indexOf('TripId');
+  for (let i=1;i<values.length;i++){
+    if (tripId && tripIdx>-1 && String(values[i][tripIdx]||'') !== String(tripId)) continue;
+    const nik = String(values[i][nikIdx]||'').trim();
+    if (nik) set.add(nik);
+  }
+  return set;
+}
+
 
 function findRowBy(sheet, colName, value){
   const values = sheet.getDataRange().getValues();
@@ -386,9 +471,16 @@ function getFamilyMembers(params){
   const nik = String(params.nik||userId);
   const tripId = String(params.tripId||'').trim();
 
-  const parts = toObjects(sh(CONFIG.SHEETS.PARTICIPANTS));
+  // ✅ IMPORTANT:
+  // MainNIK dipakai untuk:
+  // - keluarga (istri/anak/dll)
+  // - juga bisa dipakai untuk "koordinator" (magang/training) yang mendaftarkan mentee lain.
+  // Jadi, untuk halaman "Konfirmasi Kedatangan Keluarga", kita HARUS filter hanya relasi keluarga.
+  const parts = dedupeParticipants_(toObjects(sh(CONFIG.SHEETS.PARTICIPANTS)), tripId);
+
   const family = parts
-    .filter(p=>String(p.MainNIK)===nik && (!tripId || String(p.TripId||'')===tripId))
+    .filter(p=>String(p.MainNIK||'')===nik)
+    .filter(p=> isFamilyRel_(p.Relationship))
     .map(p=>({ nik:p.NIK, name:p.Nama, relationship:p.Relationship }));
 
   return { success:true, family };
@@ -405,7 +497,8 @@ function getDashboardData(params){
   if (!userId) return { success:false, message:'Session expired' };
   const tripId = String(params.tripId||'').trim();
 
-  const participants = toObjects(sh(CONFIG.SHEETS.PARTICIPANTS)).filter(p=>!tripId || String(p.TripId||'')===tripId);
+  // ✅ dedupe participants by NIK per trip to avoid double rows messing dashboard
+  const participants = dedupeParticipants_(toObjects(sh(CONFIG.SHEETS.PARTICIPANTS)), tripId);
   const vehicles = toObjects(sh(CONFIG.SHEETS.VEHICLES)).filter(v=>!tripId || String(v.TripId||'')===tripId);
 
   const totalParticipants = participants.length;
@@ -414,9 +507,11 @@ function getDashboardData(params){
   const totalOnRoad = vehicles.filter(v=>String(v.Status)==='on_the_way').length;
 
   // Breakdown by Relationship (dynamic)
+  // Breakdown by category/relationship (dynamic)
+  // NOTE: untuk mencegah salah tabulasi (koordinator training vs keluarga), kita normalisasi relasi.
   const breakdown = {};
   participants.forEach(p=>{
-    const rel = String(p.Relationship || 'lainnya').trim() || 'lainnya';
+    const rel = normalizeRelKey_(p.Relationship || p.Category || 'lainnya');
     const arrived = (p.Arrived===true || String(p.Arrived).toLowerCase()==='true');
     if (!arrived) return;
     breakdown[rel] = (breakdown[rel]||0) + 1;
@@ -427,42 +522,105 @@ function getDashboardData(params){
 
 // ===== Map =====
 function getMapData(params){
-  const userId = validateSession(params.sessionId);
+  const userId = validateSessionCached(params.sessionId);
   if (!userId) return { success:false, message:'Session expired' };
 
   const tripId = String(params.tripId||'').trim();
   const includeManifest = String(params.includeManifest||'0') === '1';
 
-  const vehiclesRaw = toObjects(sh(CONFIG.SHEETS.VEHICLES))
-    .filter(v=>!tripId || String(v.TripId||'')===tripId);
+  // ✅ cache response ringan (mis. 5 detik) agar refreshMap tidak “menghajar” Spreadsheet
+  const cache = CacheService.getScriptCache();
+  const cacheKey = 'MAP:' + (tripId||'ALL') + ':' + (includeManifest ? '1':'0');
+  const cached = cache.get(cacheKey);
+  if (cached) return JSON.parse(cached);
 
-  const participantsRaw = includeManifest
-    ? toObjects(sh(CONFIG.SHEETS.PARTICIPANTS)).filter(p=>!tripId || String(p.TripId||'')===tripId)
-    : [];
+  const vSheet = sh(CONFIG.SHEETS.VEHICLES);
+  const vLastRow = vSheet.getLastRow();
+  const vLastCol = vSheet.getLastColumn();
+  if (vLastRow < 2) {
+    const out0 = { success:true, vehicles: [], manifestByVehicle: includeManifest ? {} : undefined };
+    cache.put(cacheKey, JSON.stringify(out0), 5);
+    return out0;
+  }
 
-  const pByNik = includeManifest ? indexBy(participantsRaw, 'NIK') : {};
+  const vHeaders = vSheet.getRange(1,1,1,vLastCol).getValues()[0].map(String);
 
-  const vehicles = vehiclesRaw.map(v=>{
-    const passengers = v.Passengers ? String(v.Passengers).split(',').map(s=>s.trim()).filter(Boolean) : [];
-    return {
-      code: v.Code,
-      type: v.Type,
-      capacity: v.Capacity,
-      driver: v.Driver,
-      currentLocation: { lat: v.Latitude, lng: v.Longitude },
-      status: v.Status,
-      tripId: v.TripId || '',
+  // kolom yang dipakai
+  const idx = (name)=> vHeaders.indexOf(name);
+  const iCode = idx('Code');
+  const iType = idx('Type');
+  const iCap  = idx('Capacity');
+  const iDrv  = idx('Driver');
+  const iLat  = idx('Latitude');
+  const iLng  = idx('Longitude');
+  const iSt   = idx('Status');
+  const iPass = idx('Passengers');
+  const iTrip = idx('TripId');
+
+  const vVals = vSheet.getRange(2,1,vLastRow-1,vLastCol).getValues();
+
+  const vehicles = [];
+  for (let r=0;r<vVals.length;r++){
+    const row = vVals[r];
+    if (tripId && iTrip>-1 && String(row[iTrip]||'') !== tripId) continue;
+
+    const passengers = (iPass>-1 && row[iPass])
+      ? String(row[iPass]).split(',').map(s=>s.trim()).filter(Boolean)
+      : [];
+
+    vehicles.push({
+      code: (iCode>-1 ? row[iCode] : ''),
+      type: (iType>-1 ? row[iType] : ''),
+      capacity: (iCap>-1 ? row[iCap] : ''),
+      driver: (iDrv>-1 ? row[iDrv] : ''),
+      currentLocation: { lat: (iLat>-1 ? row[iLat] : ''), lng: (iLng>-1 ? row[iLng] : '') },
+      status: (iSt>-1 ? row[iSt] : ''),
+      tripId: (iTrip>-1 ? row[iTrip] : ''),
       passengers
-    };
-  });
+    });
+  }
 
   let manifestByVehicle = undefined;
 
   if (includeManifest){
+    const pSheet = sh(CONFIG.SHEETS.PARTICIPANTS);
+    const pLastRow = pSheet.getLastRow();
+    const pLastCol = pSheet.getLastColumn();
+
+    const pMap = {};
+    if (pLastRow >= 2){
+      const pHeaders = pSheet.getRange(1,1,1,pLastCol).getValues()[0].map(String);
+      const pIdx = (name)=> pHeaders.indexOf(name);
+      const iNik = pIdx('NIK');
+      const iNama= pIdx('Nama');
+      const iRel = pIdx('Relationship');
+      const iReg = pIdx('Region');
+      const iEst = pIdx('Estate');
+      const iArr = pIdx('Arrived');
+      const iAt  = pIdx('ArrivalTime');
+      const iPTrip = pIdx('TripId');
+
+      const pVals = pSheet.getRange(2,1,pLastRow-1,pLastCol).getValues();
+      for (let r=0;r<pVals.length;r++){
+        const row = pVals[r];
+        if (tripId && iPTrip>-1 && String(row[iPTrip]||'') !== tripId) continue;
+        const nik = String(row[iNik]||'').trim();
+        if (!nik) continue;
+        pMap[nik] = {
+          Nama: (iNama>-1 ? row[iNama] : ''),
+          Relationship: (iRel>-1 ? row[iRel] : ''),
+          Region: (iReg>-1 ? row[iReg] : ''),
+          Estate: (iEst>-1 ? row[iEst] : ''),
+          Arrived: (iArr>-1 ? row[iArr] : false),
+          ArrivalTime: (iAt>-1 ? row[iAt] : '')
+        };
+      }
+    }
+
     manifestByVehicle = {};
     vehicles.forEach(v=>{
       manifestByVehicle[v.code] = (v.passengers||[]).map(nik=>{
-        const p = pByNik[String(nik)] || {};
+        const p = pMap[String(nik)] || {};
         const arrived = (p.Arrived===true || String(p.Arrived).toLowerCase()==='true');
         return {
           nik: String(nik),
@@ -477,7 +635,23 @@ function getMapData(params){
     });
   }
 
-  return { success:true, vehicles, manifestByVehicle };
+  const out = { success:true, vehicles, manifestByVehicle };
+  cache.put(cacheKey, JSON.stringify(out), 5); // ✅ 5 detik cukup untuk realtime tapi ringan
+  return out;
+}
+
+function validateSessionCached(sessionId){
+  const sid = String(sessionId||'');
+  if (!sid) return null;
+
+  const cache = CacheService.getScriptCache();
+  const ck = 'SID:' + sid;
+  const cached = cache.get(ck);
+  if (cached) return cached; // userId
+
+  const uid = validateSession(sid); // pakai fungsi Anda yang lama
+  if (uid) cache.put(ck, uid, 60);  // ✅ cache 60 detik
+  return uid;
 }
 
 function getVehicles(params){
@@ -498,24 +672,76 @@ function getVehicles(params){
 function updateVehicleLocation(params){
   const userId = validateSession(params.sessionId);
   if (!userId) return { success:false, message:'Session expired' };
-  const vehicleCode = String(params.vehicleCode||'');
-  const lat = params.lat;
-  const lng = params.lng;
+
+  const vehicleCode = String(params.vehicleCode||'').trim();
+  if (!vehicleCode) return { success:false, message:'vehicleCode kosong' };
+
+  // ✅ normalisasi input lat/lng dari apapun (angka / string "0,964" / "9.641.875")
+  const lat = parseCoordinate_(params.lat);
+  const lng = parseCoordinate_(params.lng);
+
+  if (!isFinite(lat) || !isFinite(lng)) {
+    return { success:false, message:'Koordinat tidak valid (lat/lng bukan angka).' };
+  }
+  if (lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+    return { success:false, message:`Koordinat di luar range. lat=${lat}, lng=${lng}` };
+  }
 
   const sheet = sh(CONFIG.SHEETS.VEHICLES);
   const found = findRowBy(sheet,'Code',vehicleCode);
   if (found.row === -1) return { success:false, message:'Kendaraan tidak ditemukan' };
 
   const headers = found.headers.map(String);
-  const latCol = headers.indexOf('Latitude')+1;
-  const lngCol = headers.indexOf('Longitude')+1;
-  const stCol  = headers.indexOf('Status')+1;
+  const latCol = headers.indexOf('Latitude') + 1;
+  const lngCol = headers.indexOf('Longitude') + 1;
+  const stCol  = headers.indexOf('Status') + 1;
+
+  // ✅ simpan sebagai NUMBER (bukan string)
   sheet.getRange(found.row, latCol).setValue(lat);
   sheet.getRange(found.row, lngCol).setValue(lng);
+
   const currentStatus = sheet.getRange(found.row, stCol).getValue();
   if (String(currentStatus) !== 'arrived') sheet.getRange(found.row, stCol).setValue('on_the_way');
 
-  return { success:true, message:'Lokasi diperbarui' };
+  return { success:true, message:'Lokasi diperbarui', lat, lng };
+}
+
+/**
+ * Terima input:
+ * - number: 0.9641875
+ * - string indo: "0,9641875"
+ * - string salah-ketik: "9.641.875" -> jadi 9641875 (tetap akan ditolak oleh range check)
+ * - string biasa: "111.8929969"
+ */
+function parseCoordinate_(v){
+  if (v === null || v === undefined) return NaN;
+  if (typeof v === 'number') return v;
+
+  let s = String(v).trim();
+  if (!s) return NaN;
+
+  // hilangkan spasi
+  s = s.replace(/\s+/g, '');
+
+  const hasComma = s.includes(',');
+  const hasDot   = s.includes('.');
+
+  if (hasComma && hasDot){
+    // kasus "1.234,56" => dot ribuan, comma desimal
+    s = s.replace(/\./g, '').replace(',', '.');
+  } else if (hasComma && !hasDot){
+    // kasus "0,964" => comma desimal
+    s = s.replace(',', '.');
+  } else {
+    // hanya dot atau tanpa pemisah
+    // kalau user mengirim "9.641.875" (dot ribuan), ini akan jadi 9641875
+    // dan akan ditolak oleh range check di atas (bagus).
+    const dotCount = (s.match(/\./g) || []).length;
+    if (dotCount >= 2) s = s.replace(/\./g, '');
+  }
+
+  const n = Number(s);
+  return n;
 }
 
 function assignToVehicle(params){
@@ -587,10 +813,18 @@ function confirmArrival(params){
   const arrivalsSheet = sh(CONFIG.SHEETS.ARRIVALS);
   const now = new Date();
 
-  // Mark participants arrived + add arrivals rows
+  // ✅ Idempotent: jangan double check-in
+  // - kalau sudah Arrived di sheet Participants, skip
+  // - kalau sudah ada record di Arrivals (nik+tripId), skip
+  const alreadyArrived = getArrivedNikSet_(tripId);
+  const alreadyInArrivals = getArrivalsNikSet_(tripId);
+
   nikList.forEach(nik=>{
-    arrivalsSheet.appendRow([nik, now, userId, tripId]);
-    markParticipantArrived(nik, now, tripId);
+    const k = String(nik);
+    if (alreadyArrived.has(k)) return;
+    if (alreadyInArrivals.has(k)) return;
+    arrivalsSheet.appendRow([k, now, userId, tripId]);
+    markParticipantArrived(k, now, tripId);
   });
 
   // Update vehicle status if all passengers arrived
@@ -652,7 +886,15 @@ function getParticipants(params){
   const tripId = String(params.tripId||'').trim();
   const filter = String(params.filter||'all');
 
-  let participants = toObjects(sh(CONFIG.SHEETS.PARTICIPANTS)).filter(p=>!tripId || String(p.TripId||'')===tripId);
+  // ✅ dedupe per trip supaya tabel & rekap tidak ganda
+  let participants = dedupeParticipants_(toObjects(sh(CONFIG.SHEETS.PARTICIPANTS)), tripId);
+
+  // Tambahkan field Category (untuk UI) tanpa mengubah sheet
+  participants = participants.map(p=>({
+    ...p,
+    Category: isFamilyRel_(p.Relationship) ? 'keluarga' : normalizeRelKey_(p.Relationship || 'peserta')
+  }));
+
   if (filter === 'arrived') participants = participants.filter(p=>p.Arrived===true || String(p.Arrived).toLowerCase()==='true');
   if (filter === 'not_arrived') participants = participants.filter(p=>!(p.Arrived===true || String(p.Arrived).toLowerCase()==='true'));
 

@@ -125,7 +125,7 @@ export function setTrackVehicleOptionsUI(vehicles, { keepValue = true } = {}){
     return `<option value="${safeVal}">${label}</option>`;
   }).join('');
 
-  sel.innerHTML = `<option value="">Pilih kendaraan untuk tracking...</option>${opts}`;
+  sel.innerHTML = `<option value="">Pilih kendaraan...</option>${opts}`;
 
   if (cur) sel.value = cur;
 }

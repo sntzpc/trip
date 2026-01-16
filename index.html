@@ -23,7 +23,7 @@
     <div id="loginPage" class="page">
         <div class="login-container">
             <div class="login-header">
-                <div class="logo-text" id="appLogoText">KMP</div>
+                <img id="logoImg" src="assets/kmp.png" alt="KMP">
                 <h1 id="loginEventTitle">Trip Tracker</h1>
                 <p id="loginEventSub">Konfigurasi oleh Admin</p>
             </div>
@@ -44,7 +44,7 @@
                     </span>
                 </button>
                 <div class="login-footer">
-                    <p>© Karyamas Plantation 1 - IT Department</p>
+                    <p>©2026 Karyamas Plantation</p>
                 </div>
             </div>
         </div>
@@ -201,8 +201,12 @@
                             <table class="participant-table" id="arrivedTable">
                                 <thead>
                                     <tr>
+                                        <th>No.</th>
                                         <th>Nama</th>
                                         <th>NIK</th>
+                                        <th>Hubungan</th>
+                                        <th>Region</th>
+                                        <th>Unit</th>
                                         <th>Kendaraan</th>
                                         <th>Waktu Tiba</th>
                                         <th>Status</th>
@@ -271,15 +275,15 @@
                 <h1 class="page-title">Pemantauan Perjalanan Real-time</h1>
                  <!-- ✅ Tracking Bar (dipindahkan dari map.js) -->
                 <div id="trackBar" class="map-trackbar" style="display:none;">
-                    <button class="btn-primary" id="btnStartTrack" type="button">
-                    <i class="fas fa-location-arrow"></i> Mulai Kirim Lokasi
-                    </button>
-                    <button class="btn-secondary" id="btnStopTrack" type="button" disabled>
-                    <i class="fas fa-stop"></i> Stop
-                    </button>
                     <select id="trackVehiclePick" style="padding:12px 15px; border:2px solid #ddd; border-radius:8px;">
-                    <option value="">Pilih kendaraan untuk tracking...</option>
+                        <option value="">Pilih kendaraan...</option>
                     </select>
+                    <button class="btn-primary" id="btnStartTrack" type="button">
+                        <i class="fas fa-location-arrow"></i> Mulai Kirim Lokasi
+                    </button>
+                    <button class="btn-secondary" id="btnStopTrack" type="button" disabled style="display: none;">
+                        <i class="fas fa-stop"></i> Stop
+                    </button>
                 </div>
                 <div class="map-container">
                     <div id="map"></div>
@@ -322,7 +326,7 @@
                     <div class="arrival-info">
                         <div class="info-box">
                             <i class="fas fa-info-circle"></i>
-                            <p>Konfirmasi kedatangan Anda setelah tiba di lokasi Family Gathering di Pontianak.</p>
+                            <p id="arrivalInfoText">Konfirmasi kedatangan Anda setelah tiba di lokasi kegiatan.</p>
                         </div>
                         
                         <div class="user-arrival-status">
@@ -378,6 +382,8 @@
                                     <th>Nama</th>
                                     <th>NIK</th>
                                     <th>Hubungan</th>
+                                    <th>Region</th>
+                                    <th>Unit</th>
                                     <th>Kendaraan</th>
                                     <th>Status</th>
                                     <th>Waktu Tiba</th>

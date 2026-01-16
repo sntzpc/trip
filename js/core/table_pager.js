@@ -123,7 +123,7 @@ export function createTablePager({
     const start = (page-1)*size;
     const chunk = filtered.slice(start, start+size);
 
-    tbodyEl.innerHTML = chunk.map(renderRowHtml).join('');
+    tbodyEl.innerHTML = chunk.map((row, i) => renderRowHtml(row, start + i + 1)).join('');
 
     const shownFrom = total ? (start+1) : 0;
     const shownTo = Math.min(total, start + chunk.length);

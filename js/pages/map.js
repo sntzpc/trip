@@ -4,13 +4,9 @@ import { showNotification, ensureMapTrackingUI, setMapTrackingButtons, setTrackV
 let map = null;
 let vehicleMarkers = {};
 let lastManifestByVehicle = {};
+let vehiclesByCode = {};
 let mapHasFittedOnce = false;
 let invalidatedOnce = false;
-
-if (!invalidatedOnce){
-  invalidatedOnce = true;
-  setTimeout(() => { try { map.invalidateSize(true); } catch {} }, 0);
-}
 
 // cache untuk mencegah fetch manifest berulang
 let manifestLoadedAt = {}; // { [vehicleCode]: timestamp }
@@ -22,6 +18,34 @@ let tracking = {
   lastSentAt: 0,
   vehicleCode: ''
 };
+
+let drawerState = {
+  code: '',
+  session: null,
+  loading: false
+};
+
+// ===== SCALE SETTINGS (80 kendaraan) =====
+const TRACK_SEND_MOVING_MS = 15000; // 15 detik saat bergerak
+const TRACK_SEND_IDLE_MS   = 60000; // 60 detik saat diam
+const TRACK_MIN_MOVE_M     = 50;    // kirim jika pindah >= 50 meter
+const TRACK_JITTER_MAX_MS  = 3000;  // random 0-3 detik agar tidak serentak
+
+function randJitterMs(){
+  return Math.floor(Math.random() * (TRACK_JITTER_MAX_MS + 1));
+}
+
+// haversine distance (meter)
+function haversineM(lat1,lng1,lat2,lng2){
+  const R = 6371000;
+  const toRad = (x)=> (x * Math.PI / 180);
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
+  const a =
+    Math.sin(dLat/2)**2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng/2)**2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
 
 function ensureDrawer(){
   if (document.getElementById('vehicleDrawer')) return;
@@ -35,21 +59,69 @@ function ensureDrawer(){
         <div class="vd-title" id="vdTitle">Detail Kendaraan</div>
         <div class="vd-sub" id="vdSub">—</div>
       </div>
-      <button class="vd-close" id="vdClose">Tutup</button>
+
+      <div style="display:flex; gap:8px; align-items:center;">
+        <!-- ✅ Refresh -->
+        <button class="vd-close" id="vdRefresh" type="button" title="Refresh data">
+          <i class="fas fa-rotate-right"></i>
+        </button>
+
+        <!-- Close -->
+        <button class="vd-close" id="vdClose" type="button">Tutup</button>
+      </div>
     </div>
+
     <div class="vd-body">
       <div class="vd-pills" id="vdPills"></div>
       <div id="vdList"></div>
     </div>
   `;
   document.body.appendChild(d);
+
   document.getElementById('vdClose')?.addEventListener('click', ()=> d.classList.remove('open'));
+
+  // ✅ refresh handler
+  document.getElementById('vdRefresh')?.addEventListener('click', async ()=>{
+    if (drawerState.loading) return;
+    if (!drawerState.code || !drawerState.session) return;
+
+    try{
+      drawerState.loading = true;
+      setDrawerRefreshLoading(true);
+
+      // paksa reload manifest dari server
+      await ensureManifestForVehicle(drawerState.session, drawerState.code, { force:true });
+
+      // render ulang setelah data terbaru
+      renderDrawer(drawerState.code);
+
+      showNotification('Data penumpang diperbarui', 'success');
+    }catch(e){
+      showNotification(e?.message || 'Gagal refresh data', 'error');
+    }finally{
+      drawerState.loading = false;
+      setDrawerRefreshLoading(false);
+    }
+  });
+}
+
+function setDrawerRefreshLoading(on){
+  const btn = document.getElementById('vdRefresh');
+  if (!btn) return;
+  btn.disabled = !!on;
+  const i = btn.querySelector('i');
+  if (i){
+    i.classList.toggle('fa-spin', !!on);
+  }
 }
 
 async function openDrawer(code, session){
   ensureDrawer();
   const d = document.getElementById('vehicleDrawer');
   d.classList.add('open');
+
+  drawerState.code = String(code || '');
+  drawerState.session = session || null;
 
   // tampilkan placeholder dulu biar tidak freeze
   document.getElementById('vdTitle').textContent = `Kendaraan ${code}`;
@@ -76,52 +148,122 @@ async function openDrawer(code, session){
   renderDrawer(code);
 }
 
+function normalizeRelKey(rel){
+  const s = String(rel || '').trim().toLowerCase();
+  if (!s) return 'lainnya';
+  if (['karyawan','pemanen','borongan','akad'].includes(s)) return 'karyawan';
+  if (['staff','pegawai','employee'].includes(s)) return 'staff';
+  if (['mentee','magang','training','peserta','participant'].includes(s)) return 'mentee';
+  if (['istri','wife'].includes(s)) return 'istri';
+  if (['suami','husband'].includes(s)) return 'suami';
+  if (['anak','child'].includes(s)) return 'anak';
+  if (['ayah','bapak','father'].includes(s)) return 'ayah';
+  if (['ibu','mother','mama'].includes(s)) return 'ibu';
+  return s;
+}
+
+function titleCase(s){
+  s = String(s||'');
+  return s ? s[0].toUpperCase() + s.slice(1) : s;
+}
+
+function statusBadgeHtml(st){
+  const s = String(st||'').toLowerCase();
+  const label = (s==='arrived') ? 'TIBA' : (s==='on_the_way') ? 'ON ROAD' : (s==='waiting') ? 'WAITING' : (st||'UNKNOWN');
+  const cls = (s==='arrived') ? 'success' : (s==='on_the_way') ? 'warning' : 'info';
+  return `<span class="badge ${cls}">${esc(label)}</span>`;
+}
+
+function telLink(hp){
+  const raw = String(hp||'').trim();
+  if (!raw) return '';
+  // normalisasi sederhana: buang spasi
+  const num = raw.replace(/\s+/g,'');
+  return `<a href="tel:${esc(num)}" style="text-decoration:none; font-weight:800;">${esc(raw)}</a>`;
+}
+
 function renderDrawer(code){
+  const vMeta = vehiclesByCode[String(code)] || {};
   const list = lastManifestByVehicle[code] || [];
+
+  const cap = Number(vMeta.capacity || 0) || 0;
   const total = list.length;
-  const staff = list.filter(p => ['staff','mentee','karyawan'].includes(String(p.rel||'').toLowerCase())).length;
-  const istri = list.filter(p => String(p.rel||'').toLowerCase()==='istri').length;
-  const anak  = list.filter(p => String(p.rel||'').toLowerCase()==='anak').length;
+  const status = vMeta.status || '';
+  const driver = vMeta.driver || '-';
+  const driverPhone = vMeta.driverPhone || '';
 
+  // header
   document.getElementById('vdTitle').textContent = `Kendaraan ${code}`;
-  document.getElementById('vdSub').textContent = `Penumpang: ${total}`;
-
-  document.getElementById('vdPills').innerHTML = `
-    <div class="vd-pill">TOTAL: ${total}</div>
-    <div class="vd-pill">STAFF: ${staff}</div>
-    <div class="vd-pill">ISTRI: ${istri}</div>
-    <div class="vd-pill">ANAK: ${anak}</div>
+  document.getElementById('vdSub').innerHTML = `
+    ${statusBadgeHtml(status)}
+    <span style="margin-left:8px;">Penumpang: <b>${total}</b>${cap ? ` / ${cap}` : ''}</span>
+    <div style="margin-top:6px; font-size:12px; color:#666;">
+      Driver: <b>${esc(driver)}</b>${driverPhone ? ` • HP: ${telLink(driverPhone)}` : ''}
+    </div>
   `;
 
+  // pills dinamis by relationship
+  const counts = {};
+  for (const p of list){
+    const k = normalizeRelKey(p.rel);
+    counts[k] = (counts[k] || 0) + 1;
+  }
+  const order = ['staff','karyawan','mentee','istri','suami','anak','ayah','ibu','lainnya'];
+  const keys = Object.keys(counts).sort((a,b)=>{
+    const ia = order.indexOf(a); const ib = order.indexOf(b);
+    if (ia === -1 && ib === -1) return a.localeCompare(b);
+    if (ia === -1) return 1;
+    if (ib === -1) return -1;
+    return ia - ib;
+  });
+
+  // arrived / not arrived summary
+  const arrivedCount = list.filter(p=> !!p.arrived).length;
+  const notArrivedCount = total - arrivedCount;
+
+  document.getElementById('vdPills').innerHTML = [
+    `<div class="vd-pill">TOTAL: ${total}</div>`,
+    `<div class="vd-pill">TIBA: ${arrivedCount}</div>`,
+    `<div class="vd-pill">BELUM: ${notArrivedCount}</div>`,
+    ...keys.map(k => `<div class="vd-pill">${titleCase(k)}: ${counts[k]}</div>`)
+  ].join('');
+
+  // list render (dengan status tiap penumpang)
   const html = list.length ? list.map(p=>{
-    const meta = `${p.rel||'-'} • ${p.region||''} • ${p.estate||''}${p.arrived? ' • Tiba':''}`;
+    const rel = normalizeRelKey(p.rel || '-');
+    const st = p.arrived ? `<span class="badge success" style="margin-left:8px;">TIBA</span>`
+                         : `<span class="badge info" style="margin-left:8px;">BELUM</span>`;
+    const meta = `${rel} • ${p.region||''} • ${p.estate||''}`;
+    const arrivedAt = p.arrivedAt ? ` • ${new Date(p.arrivedAt).toLocaleString('id-ID')}` : '';
     return `<div class="vd-item">
-      <div class="nm">${esc(p.nama||'-')} <small>(${esc(p.nik||'-')})</small></div>
-      <div class="mt">${esc(meta)}</div>
+      <div class="nm">${esc(p.nama||'-')} <small>(${esc(p.nik||'-')})</small> ${st}</div>
+      <div class="mt">${esc(meta)}${esc(arrivedAt)}</div>
     </div>`;
   }).join('') : `<div class="vd-item"><div class="mt">Belum ada manifest untuk kendaraan ini.</div></div>`;
 
   document.getElementById('vdList').innerHTML = html;
+
+  // warning kalau penumpang 1 tapi capacity besar (indikasi Passengers sheet belum lengkap)
+  if (cap && total && total < cap && String(vMeta.passengers||'').length === 0){
+    // tidak memaksa, hanya info ringan
+  }
 }
 
-async function ensureManifestForVehicle(session, code){
+async function ensureManifestForVehicle(session, code, { force=false } = {}){
   if (!session) throw new Error('Session tidak ada');
 
-  // sudah pernah diload dan masih fresh 60 detik, skip
+  // ✅ kalau tidak force: masih pakai cache 60 detik
   const ts = manifestLoadedAt[code] || 0;
-  if (lastManifestByVehicle[code] && (Date.now() - ts < 60000)) return;
+  if (!force && lastManifestByVehicle[code] && (Date.now() - ts < 60000)) return;
 
-  if (manifestLoading[code]) return; // sedang loading, biarkan
+  if (manifestLoading[code]) return;
   manifestLoading[code] = true;
 
   try{
     const tripId = session?.activeTripId || '';
-    // ⚠️ backend Anda saat ini hanya punya getMapData(includeManifest=1) untuk semua kendaraan.
-    // Ini tetap berat, tapi hanya terjadi saat user klik 1 kendaraan (bukan saat buka map).
     const res = await api.getMapData(session.sessionId, tripId, 1);
 
     lastManifestByVehicle = res.manifestByVehicle || {};
-    manifestLoadedAt = manifestLoadedAt || {};
     Object.keys(lastManifestByVehicle).forEach(k=> manifestLoadedAt[k] = Date.now());
 
     if (!lastManifestByVehicle[code]) lastManifestByVehicle[code] = [];
@@ -227,31 +369,78 @@ function startTracking(session){
   if (!vehicleCode) return showNotification('Pilih kendaraan dulu untuk tracking', 'error');
   if (!navigator.geolocation) return showNotification('Geolocation tidak didukung', 'error');
 
+  // kalau sebelumnya masih tracking, stop dulu biar tidak dobel timer/watch
+  stopTracking();
+
   tracking.vehicleCode = vehicleCode;
+  tracking.lastSentAt = 0;
+  tracking._lastPos = null;
+  tracking._lastSentCoord = null;
+
+  // jitter per start (mencegah serentak)
+  tracking._jitterMs = randJitterMs();
 
   // watch posisi (lebih smooth)
   tracking.watchId = navigator.geolocation.watchPosition(
-    (pos)=> tracking._lastPos = pos,
+    (pos)=> { tracking._lastPos = pos; },
     (err)=> showNotification('GPS error: ' + err.message, 'error'),
     { enableHighAccuracy:true, maximumAge: 2000, timeout: 15000 }
   );
 
-  // kirim tiap ~6 detik (hemat)
+  // timer check cepat, tapi send diputuskan oleh throttle + distance
   tracking.timer = setInterval(async ()=>{
     const pos = tracking._lastPos;
     if (!pos) return;
+
+    const lat = pos.coords.latitude;
+    const lng = pos.coords.longitude;
+
+    // validasi dasar
+    if (!isFinite(lat) || !isFinite(lng)) return;
+
     const now = Date.now();
-    if (now - tracking.lastSentAt < 5500) return;
+
+    // hitung jarak pindah dari titik terakhir yang pernah DIKIRIM
+    let movedM = 999999;
+    if (tracking._lastSentCoord){
+      movedM = haversineM(
+        tracking._lastSentCoord.lat,
+        tracking._lastSentCoord.lng,
+        lat, lng
+      );
+    }
+
+    const isMoving = movedM >= TRACK_MIN_MOVE_M;
+
+    // throttle dinamis: bergerak 15s, diam 60s (+ jitter)
+    const minGap = (isMoving ? TRACK_SEND_MOVING_MS : TRACK_SEND_IDLE_MS) + (tracking._jitterMs || 0);
+
+    if (now - tracking.lastSentAt < minGap) return;
+
+    // ✅ boleh kirim kalau:
+    // - pertama kali, atau
+    // - bergerak >= 50m, atau
+    // - sudah lewat idle interval (tetap refresh posisi walau diam)
+    const allowSend = (!tracking._lastSentCoord) || isMoving || (now - tracking.lastSentAt >= TRACK_SEND_IDLE_MS + (tracking._jitterMs||0));
+    if (!allowSend) return;
+
     tracking.lastSentAt = now;
 
     try{
       await api.updateLocation(
         session.sessionId,
         tracking.vehicleCode,
-        pos.coords.latitude,
-        pos.coords.longitude
+        lat,
+        lng
       );
-    }catch(e){}
+
+      // update titik terakhir yang sukses DIKIRIM
+      tracking._lastSentCoord = { lat, lng };
+
+    }catch(e){
+      // gagal kirim → jangan update _lastSentCoord
+      // biarkan retry pada loop berikutnya
+    }
   }, 1200);
 
   setMapTrackingButtons(true);
@@ -260,17 +449,21 @@ function startTracking(session){
 
 function stopTracking(){
   if (tracking.watchId !== null){
-    navigator.geolocation.clearWatch(tracking.watchId);
+    try{ navigator.geolocation.clearWatch(tracking.watchId); }catch{}
     tracking.watchId = null;
   }
   if (tracking.timer){
     clearInterval(tracking.timer);
     tracking.timer = null;
   }
+
   tracking._lastPos = null;
+  tracking._lastSentCoord = null;
+  tracking.lastSentAt = 0;
+  tracking.vehicleCode = '';
+  tracking._jitterMs = 0;
 
   setMapTrackingButtons(false);
-
   showNotification('Kirim lokasi dihentikan', 'info');
 }
 
@@ -327,6 +520,12 @@ export async function refreshMap(session, { includeManifest = 0, fitMode = 'none
 
     const vehicles = res.vehicles || [];
 
+    vehiclesByCode = {};
+    for (const v of vehicles){
+      if (!v || !v.code) continue;
+      vehiclesByCode[String(v.code)] = v;
+    }
+
     // hanya update manifest cache kalau memang diminta
     if (includeManifest) {
       lastManifestByVehicle = res.manifestByVehicle || {};
@@ -336,7 +535,10 @@ export async function refreshMap(session, { includeManifest = 0, fitMode = 'none
     prepareTrackingUI(session);
 
     // setelah trackbar muncul, invalidate sekali biar leaflet resize clean
-    setTimeout(() => { try { map.invalidateSize(true); } catch {} }, 0);
+    if (!invalidatedOnce){
+      invalidatedOnce = true;
+      setTimeout(() => { try { map.invalidateSize(true); } catch {} }, 0);
+    }
 
     setTrackVehicleOptionsUI(vehicles, { keepValue: true });
 
@@ -417,4 +619,8 @@ export async function refreshMap(session, { includeManifest = 0, fitMode = 'none
     try{ showNotification(err?.message || 'Gagal memuat peta', 'error'); }catch{}
     console.error(err);
   }
+}
+
+export function stopTrackingPublic(){
+  stopTracking();
 }

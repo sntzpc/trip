@@ -3,11 +3,11 @@ import { loadSession, clearSession, loadCfg, saveCfg } from './core/storage.js';
 import { $, showNotification, activateMenu, showPage, toggleSidebar as _toggleSidebar, closeSidebarOnMobile } from './core/ui.js';
 import { doLogin, bindLoginEnter } from './pages/login.js';
 import { loadDashboard, showRegionDetailsUI, hideRegionDetailsUI } from './pages/dashboard.js';
-import { initMap, refreshMap } from './pages/map.js';
+import { initMap, refreshMap, stopTrackingPublic  } from './pages/map.js';
 import { startScanning, manualSubmit, confirmAssignment, getPendingVehicle } from './pages/scan.js';
 import { renderFamily, confirmArrival as doConfirmArrival } from './pages/arrival.js';
 import { loadParticipants, searchAndRender } from './pages/participants.js';
-import { initAdminEnhancements, showTab, loadUsers, loadVehicles, loadConfigAndTrips, saveConfig, upsertTrip, upsertUser, upsertVehicle } from './pages/admin.js';
+import { initAdminEnhancements, showTab, loadUsers, loadVehicles, loadParticipantsAdmin, loadConfigAndTrips, saveConfig, upsertTrip, upsertUser, upsertVehicle, upsertParticipant } from './pages/admin.js';
 
 const State = {
   session: null,
@@ -114,6 +114,12 @@ function applyConfig(cfg){
   $('#sidebarEventSub') && ($('#sidebarEventSub').textContent = eventSub);
   $('#appOrgName') && cfg.orgName && ($('#appOrgName').textContent = cfg.orgName);
   startCountdown(cfg);
+    const ai = document.getElementById('arrivalInfoText');
+  if (ai){
+    const en = cfg.eventName || cfg.appTitle || 'kegiatan';
+    const sub = cfg.eventSub ? ` (${cfg.eventSub})` : '';
+    ai.textContent = `Konfirmasi kedatangan Anda setelah tiba di lokasi ${en}${sub}.`;
+  }
 }
 
 let countdownTick = null;
@@ -309,6 +315,7 @@ window.confirmAssignment = async ()=>{
 // Arrival
 window.confirmArrival = async ()=>{
   if (!State.session || !State.user) return;
+  try { stopTrackingPublic(); } catch {}
   await doConfirmArrival(State.session, State.user);
 };
 
@@ -338,6 +345,7 @@ window.showAdmin = async ()=>{
   await loadUsers(State.session);
   await loadVehicles(State.session);
   await loadConfigAndTrips(State.session);
+  await loadParticipantsAdmin(State.session);
 };
 
 window.showAdminTab = (key)=> showTab(key);
@@ -427,7 +435,43 @@ window.editVehicle = (code)=>{
   };
   upsertVehicle(State.session, v);
 };
+window.addNewParticipant = ()=>{
+  const tripId = State.session?.activeTripId || '';
+  const p = {
+    __isNew:true,
+    NIK: prompt('NIK:', '')?.trim(),
+    Nama: prompt('Nama:', '')?.trim(),
+    Relationship: prompt('Kategori/Hubungan (mentee/staff/istri/anak/dll):', 'mentee')?.trim(),
+    Region: prompt('Region:', '')?.trim(),
+    Estate: prompt('Estate:', '')?.trim(),
+    MainNIK: prompt('MainNIK (untuk keluarga; kosong jika peserta mandiri):', '')?.trim(),
+    Vehicle: prompt('Vehicle code (opsional):', '')?.trim(),
+    Arrived: false,
+    TripId: tripId
+  };
+  if (!p.NIK) return;
+  upsertParticipant(State.session, p);
+};
 
+window.editParticipant = (nik)=>{
+  const tripId = State.session?.activeTripId || '';
+  const list = (window.__adminParticipants||[]);
+  const row = list.find(x=> String(x.NIK)===String(nik) && String(x.TripId||'')===String(tripId));
+  if (!row) return alert('Participant tidak ditemukan untuk Trip aktif');
+
+  const p = {
+    ...row,
+    __isNew:false,
+    Nama: prompt('Nama:', row.Nama||'')?.trim() ?? row.Nama,
+    Relationship: prompt('Kategori/Hubungan:', row.Relationship||'')?.trim() ?? row.Relationship,
+    Region: prompt('Region:', row.Region||'')?.trim() ?? row.Region,
+    Estate: prompt('Estate:', row.Estate||'')?.trim() ?? row.Estate,
+    MainNIK: prompt('MainNIK:', row.MainNIK||'')?.trim() ?? row.MainNIK,
+    Vehicle: prompt('Vehicle:', row.Vehicle||'')?.trim() ?? row.Vehicle,
+    TripId: tripId
+  };
+  upsertParticipant(State.session, p);
+};
 // realtime clock
 setInterval(()=>{
   const el = $('#currentDateTime');

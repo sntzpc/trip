@@ -51,6 +51,56 @@ export function initAdminEnhancements(){
         </table>
       </div>
     `;
+      // ✅ Inject tab Participants (jika belum ada)
+      if (!tabs.querySelector('[data-tab="participants"]')){
+        const b = document.createElement('button');
+        b.className = 'admin-tab';
+        b.textContent = 'Participants';
+        b.dataset.tab = 'participants';
+        b.onclick = () => window.showAdminTab('participants');
+        tabs.insertBefore(b, tabs.children[2]||null); // taruh setelah Users/Vehicles
+      }
+
+      // ✅ Pane Participants
+      if (content && !document.getElementById('adminParticipantsTab')){
+        const p = document.createElement('div');
+        p.id = 'adminParticipantsTab';
+        p.className = 'admin-tab-content';
+        p.innerHTML = `
+          <h3>Manajemen Participants</h3>
+
+          <div class="admin-actions-row">
+            <button class="btn-primary" id="btnAddParticipant">
+              <i class="fas fa-plus"></i> Tambah Participant
+            </button>
+            <small style="opacity:.75">TripId akan otomatis memakai Active Trip ID.</small>
+          </div>
+
+          <div class="admin-table-container">
+            <table class="admin-table">
+              <thead>
+                <tr>
+                  <th>NIK</th>
+                  <th>Nama</th>
+                  <th>Kategori/Hubungan</th>
+                  <th>Region</th>
+                  <th>Estate</th>
+                  <th>MainNIK</th>
+                  <th>Vehicle</th>
+                  <th>Arrived</th>
+                  <th>TripId</th>
+                  <th>Aksi</th>
+                </tr>
+              </thead>
+              <tbody id="adminParticipantsTable"></tbody>
+            </table>
+          </div>
+        `;
+        content.appendChild(p);
+
+        // tombol tambah
+        document.getElementById('btnAddParticipant')?.addEventListener('click', ()=> window.addNewParticipant?.());
+      }
     content.appendChild(div);
 
     $('#btnSaveCfg')?.addEventListener('click', ()=> window.saveConfig?.());
@@ -69,6 +119,7 @@ export function showTab(tabKey){
   const idMap = {
     users:'adminUsersTab',
     vehicles:'adminVehiclesTab',
+    participants:'adminParticipantsTab',
     history:'adminHistoryTab',
     password:'adminPasswordTab',
     settings:'adminSettingsTab'
@@ -140,6 +191,48 @@ export async function loadVehicles(session){
   vehiclesPager.setData(window.__adminVehicles);
 }
 
+let participantsPager = null;
+
+export async function loadParticipantsAdmin(session){
+  const tripId = session?.activeTripId || '';
+  const res = await api.adminGet(session.sessionId, 'participants', tripId);
+
+  const container = document.querySelector('#adminParticipantsTab .admin-table-container');
+  const tbody = document.getElementById('adminParticipantsTable');
+  if (!tbody || !container) return;
+
+  if (!participantsPager){
+    participantsPager = createTablePager({
+      containerEl: container,
+      tbodyEl: tbody,
+      searchPlaceholder: 'Cari NIK/Nama/Relasi/Vehicle/MainNIK/TripId...',
+      getRowText: (p)=> `${p.NIK||''} ${p.Nama||''} ${p.Relationship||''} ${p.Vehicle||''} ${p.MainNIK||''} ${p.TripId||''}`,
+      renderRowHtml: (p)=> {
+        const arrived = (p.Arrived===true || String(p.Arrived).toLowerCase()==='true');
+        return `
+          <tr>
+            <td>${esc(p.NIK||'')}</td>
+            <td>${esc(p.Nama||'')}</td>
+            <td>${esc(p.Relationship||p.Category||'')}</td>
+            <td>${esc(p.Region||'')}</td>
+            <td>${esc(p.Estate||'')}</td>
+            <td>${esc(p.MainNIK||'')}</td>
+            <td>${esc(p.Vehicle||'')}</td>
+            <td>${arrived ? '<span class="badge success">true</span>' : '<span class="badge warning">false</span>'}</td>
+            <td>${esc(p.TripId||'')}</td>
+            <td>
+              <button class="btn-small" onclick='editParticipant("${escAttr(p.NIK)}")'><i class="fas fa-edit"></i></button>
+            </td>
+          </tr>
+        `;
+      }
+    });
+  }
+
+  window.__adminParticipants = res.participants || [];
+  participantsPager.setData(window.__adminParticipants);
+}
+
 export async function loadConfigAndTrips(session){
   const cfgRes = await api.adminGet(session.sessionId, 'config');
   const cfg = cfgRes.config || {};
@@ -199,6 +292,12 @@ export async function upsertVehicle(session, vehicle){
   await api.adminUpdate(session.sessionId, 'vehicle', vehicle.__isNew ? 'add' : 'update', vehicle);
   showNotification('Kendaraan tersimpan', 'success');
   await loadVehicles(session);
+}
+
+export async function upsertParticipant(session, p){
+  await api.adminUpdate(session.sessionId, 'participant', p.__isNew ? 'add' : 'update', p);
+  showNotification('Participant tersimpan', 'success');
+  await loadParticipantsAdmin(session);
 }
 
 function esc(s){

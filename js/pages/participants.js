@@ -12,32 +12,49 @@ export async function loadParticipants(session, filter='all'){
 
   const container = document.querySelector('.participants-table-container');
   const tbody = $('#participantsTable tbody');
+
   if (!pager){
     pager = createTablePager({
       containerEl: container,
       tbodyEl: tbody,
-      searchPlaceholder: 'Cari nama / NIK / hubungan / kendaraan...',
-      getRowText: (p)=> `${p.Nama||p.name||''} ${p.NIK||p.nik||''} ${p.Relationship||p.relationship||''} ${p.Vehicle||p.vehicle||''}`,
+      searchPlaceholder: 'Cari nama / NIK / hubungan / region / unit / kendaraan...',
+      getRowText: (p)=> {
+        const nama = p.Nama || p.name || '';
+        const nik  = p.NIK || p.nik || '';
+        const rel  = p.Relationship || p.Category || p.relationship || '';
+        const reg  = p.Region || p.region || '';
+        const est  = p.Estate || p.estate || '';
+        const veh  = p.Vehicle || p.vehicle || '';
+        return `${nama} ${nik} ${rel} ${reg} ${est} ${veh}`;
+      },
       renderRowHtml: (p)=> {
-        const arrived = p.Arrived===true || p.Arrived==='TRUE' || p.Arrived==='true';
+        const arrived = (p.Arrived===true || p.Arrived==='TRUE' || p.Arrived==='true');
         return `
           <tr>
             <td>${esc(p.Nama||p.name||'-')}</td>
             <td>${esc(p.NIK||p.nik||'-')}</td>
             <td>${esc(p.Relationship||p.Category||p.relationship||'-')}</td>
+
+            <!-- ✅ kolom baru -->
+            <td>${esc(p.Region||p.region||'-')}</td>
+            <td>${esc(p.Estate||p.estate||'-')}</td>
+
             <td>${esc(p.Vehicle||p.vehicle||'-')}</td>
-            <td>${arrived?'<span class="badge success">Tiba</span>':'<span class="badge warning">Belum</span>'}</td>
-            <td>${esc(p.ArrivalTime?fmtDt(p.ArrivalTime):'-')}</td>
+            <td>${arrived
+              ? '<span class="badge success">Tiba</span>'
+              : '<span class="badge warning">Belum</span>'
+            }</td>
+            <td>${esc(p.ArrivalTime ? fmtDt(p.ArrivalTime) : '-')}</td>
           </tr>
         `;
       }
     });
   }
+
   pager.setData(lastParticipants);
 }
 
 export function searchAndRender(q){
-  // tetap support input lama; cukup set ke search box pager kalau ada
   const box = document.querySelector('.pager-search');
   if (box){
     box.value = q || '';

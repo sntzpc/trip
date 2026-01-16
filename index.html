@@ -1,0 +1,504 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Trip Tracker</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <!-- Loading Screen -->
+    <div id="loadingScreen" class="loading-screen">
+        <div class="loading-content">
+            <div class="spinner"></div>
+            <h2 id="appOrgName">Karyamas Plantation</h2>
+            <p id="appEventName">Trip Tracker</p>
+        </div>
+    </div>
+
+    <!-- Login Page -->
+    <div id="loginPage" class="page">
+        <div class="login-container">
+            <div class="login-header">
+                <div class="logo-text" id="appLogoText">KMP</div>
+                <h1 id="loginEventTitle">Trip Tracker</h1>
+                <p id="loginEventSub">Konfigurasi oleh Admin</p>
+            </div>
+            <div class="login-form">
+                <div class="form-group">
+                    <label for="nik"><i class="fas fa-id-card"></i> NIK</label>
+                    <input type="text" id="nik" placeholder="Masukkan NIK Anda">
+                </div>
+                <div class="form-group">
+                    <label for="password"><i class="fas fa-lock"></i> Password</label>
+                    <input type="password" id="password" placeholder="Masukkan password">
+                    <div class="password-info">Password default: user123</div>
+                </div>
+                <button id="loginBtn" class="btn-primary" onclick="login()">
+                    <span class="btn-text">Login</span>
+                    <span class="btn-spinner" style="display:none;">
+                        <i class="fas fa-spinner fa-spin"></i>
+                    </span>
+                </button>
+                <div class="login-footer">
+                    <p>© Karyamas Plantation 1 - IT Department</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Main App (hidden initially) -->
+    <div id="mainApp" class="page" style="display:none;">
+        <!-- Header -->
+        <header class="app-header">
+            <div class="header-left">
+                <div class="menu-toggle" onclick="toggleSidebar()">
+                    <i class="fas fa-bars"></i>
+                </div>
+                <div class="app-logo">
+                    <h2><span id="headerMainTitle">Trip</span> <span class="logo-subtitle" id="headerSubTitle">Tracker</span></h2>
+                </div>
+            </div>
+            <div class="header-center">
+                <div class="date-time-display">
+                    <i class="fas fa-calendar"></i>
+                    <span id="currentDateTime"></span>
+                </div>
+            </div>
+            <div class="header-right">
+                <div class="user-info" id="userInfo">
+                    <i class="fas fa-user-circle"></i>
+                    <span id="userName">Loading...</span>
+                </div>
+                <button class="btn-logout" onclick="logout()">
+                    <i class="fas fa-sign-out-alt"></i>
+                </button>
+            </div>
+        </header>
+
+        <!-- Sidebar -->
+        <nav class="sidebar" id="sidebar">
+            <div class="sidebar-menu">
+                <a href="#" class="menu-item active" onclick="showDashboard()">
+                    <i class="fas fa-home"></i>
+                    <span>Dashboard</span>
+                </a>
+                <a href="#" class="menu-item" onclick="showScan()">
+                    <i class="fas fa-qrcode"></i>
+                    <span>Scan Kendaraan</span>
+                </a>
+                <a href="#" class="menu-item" onclick="showMap()">
+                    <i class="fas fa-map-marked-alt"></i>
+                    <span>Pemantauan Perjalanan</span>
+                </a>
+                <a href="#" class="menu-item" onclick="showArrival()">
+                    <i class="fas fa-check-circle"></i>
+                    <span>Konfirmasi Kedatangan</span>
+                </a>
+                <a href="#" class="menu-item" onclick="showParticipants()">
+                    <i class="fas fa-users"></i>
+                    <span>Daftar Peserta</span>
+                </a>
+                <div class="menu-divider"></div>
+                <a href="#" class="menu-item" id="adminMenu" style="display:none;" onclick="showAdmin()">
+                    <i class="fas fa-cog"></i>
+                    <span>Admin Panel</span>
+                </a>
+            </div>
+            <div class="sidebar-footer">
+                <div class="event-info">
+                    <h4 id="sidebarEventTitle">Trip Tracker</h4>
+                    <p id="sidebarEventSub">-</p>
+                    <div class="countdown">
+                        <p id="countdownTimer">- Hari - Jam - Menit</p>
+                    </div>
+                </div>
+            </div>
+        </nav>
+
+        <!-- Main Content -->
+        <main class="main-content" id="mainContent">
+            <!-- Dashboard Page -->
+            <div id="dashboardPage" class="content-page">
+                <h1 class="page-title">Dashboard</h1>
+                <div class="stats-cards">
+                    <div class="stat-card" onclick="showRegionDetails()">
+                        <div class="stat-icon total">
+                            <i class="fas fa-users"></i>
+                        </div>
+                        <div class="stat-info">
+                            <h3>Total Peserta</h3>
+                            <p id="totalParticipants">0</p>
+                        </div>
+                    </div>
+                    <div class="stat-card" onclick="showVehicleDetails()">
+                        <div class="stat-icon vehicle">
+                            <i class="fas fa-car"></i>
+                        </div>
+                        <div class="stat-info">
+                            <h3>Kendaraan</h3>
+                            <p id="totalVehicles">0</p>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon arrived">
+                            <i class="fas fa-check-circle"></i>
+                        </div>
+                        <div class="stat-info">
+                            <h3>Telah Tiba</h3>
+                            <p id="totalArrived">0</p>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon onroad">
+                            <i class="fas fa-road"></i>
+                        </div>
+                        <div class="stat-info">
+                            <h3>Dalam Perjalanan</h3>
+                            <p id="totalOnRoad">0</p>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="dashboard-details">
+                    <div class="detail-section" id="regionDetails" style="display:none;">
+                        <h3>Detail per Region</h3>
+                        <div class="region-cards" id="regionCards">
+                            <!-- Region cards will be generated here -->
+                        </div>
+                        <button class="btn-back" onclick="hideRegionDetails()">Kembali</button>
+                    </div>
+                    
+                    <div class="detail-section" id="vehicleDetails" style="display:none;">
+                        <h3>Detail Kendaraan</h3>
+                        <div class="vehicle-list" id="vehicleList">
+                            <!-- Vehicle list will be generated here -->
+                        </div>
+                        <button class="btn-back" onclick="hideVehicleDetails()">Kembali</button>
+                    </div>
+                    
+                    <div class="detail-section" id="arrivalDetails">
+                        <h3>Detail Kedatangan</h3>
+                        <div class="summary-cards">
+                            <div class="summary-card">
+                                <h4>Staff/Mentee/Karyawan</h4>
+                                <p id="staffArrived">0</p>
+                            </div>
+                            <div class="summary-card">
+                                <h4>Istri</h4>
+                                <p id="wifeArrived">0</p>
+                            </div>
+                            <div class="summary-card">
+                                <h4>Anak</h4>
+                                <p id="childArrived">0</p>
+                            </div>
+                        </div>
+                        <div class="participant-table-container">
+                            <h4>Daftar Peserta yang Telah Tiba</h4>
+                            <table class="participant-table" id="arrivedTable">
+                                <thead>
+                                    <tr>
+                                        <th>Nama</th>
+                                        <th>NIK</th>
+                                        <th>Kendaraan</th>
+                                        <th>Waktu Tiba</th>
+                                        <th>Status</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <!-- Table rows will be generated here -->
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Scan Page -->
+            <div id="scanPage" class="content-page" style="display:none;">
+                <h1 class="page-title">Scan Kendaraan</h1>
+                <div class="scan-container">
+                    <div class="scan-info">
+                        <p>Pindai barcode kendaraan untuk mendaftarkan diri dan keluarga Anda ke dalam kendaraan tersebut.</p>
+                        <div class="current-user-info">
+                            <h4>Anda:</h4>
+                            <p id="currentUserInfo">Loading...</p>
+                        </div>
+                    </div>
+                    
+                    <div class="scan-area">
+                        <div class="scanner-box" id="scannerBox">
+                            <i class="fas fa-qrcode"></i>
+                            <p>Arahkan kamera ke barcode kendaraan</p>
+                            <button id="startScanBtn" class="btn-primary" onclick="startScanning()">
+                                <span class="btn-text">Mulai Scan</span>
+                                <span class="btn-spinner" style="display:none;">
+                                    <i class="fas fa-spinner fa-spin"></i>
+                                </span>
+                            </button>
+                        </div>
+                        
+                        <div class="manual-input">
+                            <h4>Atau masukkan kode manual:</h4>
+                            <input type="text" id="vehicleCodeInput" placeholder="Kode kendaraan (ex: KMP1-A01)">
+                            <button id="manualSubmitBtn" class="btn-secondary" onclick="manualVehicleSubmit()">
+                                <span class="btn-text">Submit</span>
+                                <span class="btn-spinner" style="display:none;">
+                                    <i class="fas fa-spinner fa-spin"></i>
+                                </span>
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <div class="scan-result" id="scanResult" style="display:none;">
+                        <h3>Hasil Scan</h3>
+                        <div class="result-details" id="resultDetails"></div>
+                        <button class="btn-primary" onclick="confirmAssignment()">
+                            <span class="btn-text">Konfirmasi Penempatan</span>
+                            <span class="btn-spinner" style="display:none;">
+                                <i class="fas fa-spinner fa-spin"></i>
+                            </span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Map Page -->
+            <div id="mapPage" class="content-page" style="display:none;">
+                <h1 class="page-title">Pemantauan Perjalanan Real-time</h1>
+                <div class="map-container">
+                    <div id="map"></div>
+                    <div class="map-controls">
+                        <div class="map-legend">
+                            <h4>Legenda</h4>
+                            <div class="legend-item">
+                                <span class="legend-color" style="background-color:#2ecc71;"></span>
+                                <span>Telah Tiba</span>
+                            </div>
+                            <div class="legend-item">
+                                <span class="legend-color" style="background-color:#e74c3c;"></span>
+                                <span>Dalam Perjalanan</span>
+                            </div>
+                            <div class="legend-item">
+                                <span class="legend-color" style="background-color:#3498db;"></span>
+                                <span>Belum Berangkat</span>
+                            </div>
+                        </div>
+                        <div class="vehicle-selector">
+                            <h4>Filter Kendaraan</h4>
+                            <select id="vehicleFilter" onchange="filterMapVehicles()">
+                                <option value="all">Semua Kendaraan</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+                <div class="vehicle-list-container">
+                    <h3>Daftar Kendaraan</h3>
+                    <div class="vehicle-cards" id="vehicleCards">
+                        <!-- Vehicle cards will be generated here -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- Arrival Page -->
+            <div id="arrivalPage" class="content-page" style="display:none;">
+                <h1 class="page-title">Konfirmasi Kedatangan</h1>
+                <div class="arrival-container">
+                    <div class="arrival-info">
+                        <div class="info-box">
+                            <i class="fas fa-info-circle"></i>
+                            <p>Konfirmasi kedatangan Anda setelah tiba di lokasi Family Gathering di Pontianak.</p>
+                        </div>
+                        
+                        <div class="user-arrival-status">
+                            <h3>Status Anda</h3>
+                            <div class="status-card" id="userArrivalStatus">
+                                <div class="status-icon">
+                                    <i class="fas fa-clock"></i>
+                                </div>
+                                <div class="status-details">
+                                    <h4>Belum Konfirmasi</h4>
+                                    <p>Anda belum mengkonfirmasi kedatangan</p>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="arrival-action">
+                            <button id="confirmArrivalBtn" class="btn-primary" onclick="confirmArrival()">
+                                <span class="btn-text">Konfirmasi Kedatangan Saya</span>
+                                <span class="btn-spinner" style="display:none;">
+                                    <i class="fas fa-spinner fa-spin"></i>
+                                </span>
+                            </button>
+                            <p class="action-note">Pastikan Anda sudah berada di lokasi Family Gathering sebelum mengkonfirmasi.</p>
+                        </div>
+                    </div>
+                    
+                    <div class="family-arrival-section">
+                        <h3>Konfirmasi Kedatangan Keluarga</h3>
+                        <div class="family-list" id="familyList">
+                            <!-- Family members will be listed here -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Participants Page -->
+            <div id="participantsPage" class="content-page" style="display:none;">
+                <h1 class="page-title">Daftar Peserta</h1>
+                <div class="participants-container">
+                    <div class="search-filter">
+                        <input style="display: none;" type="text" id="participantSearch" placeholder="Cari nama atau NIK..." onkeyup="searchParticipants()">
+                        <select id="participantFilter" onchange="filterParticipants()">
+                            <option value="all">Semua Status</option>
+                            <option value="arrived">Telah Tiba</option>
+                            <option value="not_arrived">Belum Tiba</option>
+                        </select>
+                    </div>
+                    
+                    <div class="participants-table-container">
+                        <table class="participants-table" id="participantsTable">
+                            <thead>
+                                <tr>
+                                    <th>Nama</th>
+                                    <th>NIK</th>
+                                    <th>Hubungan</th>
+                                    <th>Kendaraan</th>
+                                    <th>Status</th>
+                                    <th>Waktu Tiba</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <!-- Participants will be listed here -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Admin Page -->
+            <div id="adminPage" class="content-page" style="display:none;">
+                <h1 class="page-title">Admin Panel</h1>
+                <div class="admin-container">
+                    <div class="admin-tabs">
+                        <button class="admin-tab active" onclick="showAdminTab('users')">Manajemen User</button>
+                        <button class="admin-tab" onclick="showAdminTab('vehicles')">Manajemen Kendaraan</button>
+                        <button class="admin-tab" onclick="showAdminTab('history')">Riwayat</button>
+                        <button class="admin-tab" onclick="showAdminTab('password')">Ganti Password</button>
+                    </div>
+                    
+                    <div class="admin-content">
+                        <!-- Users Management Tab -->
+                        <div id="adminUsersTab" class="admin-tab-content active">
+                            <h3>Manajemen User</h3>
+                            <button class="btn-primary" onclick="addNewUser()">
+                                <i class="fas fa-plus"></i> Tambah User
+                            </button>
+                            <div class="admin-table-container">
+                                <table class="admin-table">
+                                    <thead>
+                                        <tr>
+                                            <th>NIK</th>
+                                            <th>Nama</th>
+                                            <th>Region</th>
+                                            <th>Estate</th>
+                                            <th>Status</th>
+                                            <th>Aksi</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="adminUsersTable">
+                                        <!-- Users will be listed here -->
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                        
+                        <!-- Vehicles Management Tab -->
+                        <div id="adminVehiclesTab" class="admin-tab-content">
+                            <h3>Manajemen Kendaraan</h3>
+                            <button class="btn-primary" onclick="addNewVehicle()">
+                                <i class="fas fa-plus"></i> Tambah Kendaraan
+                            </button>
+                            <div class="admin-table-container">
+                                <table class="admin-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Kode</th>
+                                            <th>Jenis</th>
+                                            <th>Kapasitas</th>
+                                            <th>Pengemudi</th>
+                                            <th>Status</th>
+                                            <th>Penumpang</th>
+                                            <th>Aksi</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="adminVehiclesTable">
+                                        <!-- Vehicles will be listed here -->
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                        
+                        <!-- History Tab -->
+                        <div id="adminHistoryTab" class="admin-tab-content">
+                            <h3>Riwayat Data</h3>
+                            <p>Data yang berusia lebih dari 2 hari akan dipindahkan ke sini secara otomatis.</p>
+                            <div class="admin-table-container">
+                                <table class="admin-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Tanggal</th>
+                                            <th>Tipe Data</th>
+                                            <th>Detail</th>
+                                            <th>Aksi</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="adminHistoryTable">
+                                        <!-- History will be listed here -->
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                        
+                        <!-- Password Tab -->
+                        <div id="adminPasswordTab" class="admin-tab-content">
+                            <h3>Ganti Password</h3>
+                            <div class="password-form">
+                                <div class="form-group">
+                                    <label>Password Lama</label>
+                                    <input type="password" id="oldPassword">
+                                </div>
+                                <div class="form-group">
+                                    <label>Password Baru</label>
+                                    <input type="password" id="newPassword">
+                                </div>
+                                <div class="form-group">
+                                    <label>Konfirmasi Password Baru</label>
+                                    <input type="password" id="confirmPassword">
+                                </div>
+                                <button class="btn-primary" onclick="changePassword()">
+                                    <span class="btn-text">Ganti Password</span>
+                                    <span class="btn-spinner" style="display:none;">
+                                        <i class="fas fa-spinner fa-spin"></i>
+                                    </span>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Notification System -->
+    <div id="notificationContainer" class="notification-container"></div>
+
+    <!-- Scripts -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://html5-qrcode.min.js"></script>
+    <script type="module" src="js/app.js"></script>
+</body>
+</html>

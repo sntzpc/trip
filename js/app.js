@@ -3,18 +3,18 @@ import { loadSession, clearSession, loadCfg, saveCfg } from './core/storage.js';
 import { $, showNotification, activateMenu, showPage, toggleSidebar as _toggleSidebar, closeSidebarOnMobile } from './core/ui.js';
 import { doLogin, bindLoginEnter } from './pages/login.js';
 import { loadDashboard, showRegionDetailsUI, hideRegionDetailsUI } from './pages/dashboard.js';
-import { initMap, refreshMap, stopTrackingPublic  } from './pages/map.js';
+import { initMap, refreshMap, stopTrackingPublic, startBackgroundTrackingPublic } from './pages/map.js';
 import { startScanning, manualSubmit, confirmAssignment, getPendingVehicle } from './pages/scan.js';
 import { renderFamily, confirmArrival as doConfirmArrival, initArrivalPage  } from './pages/arrival.js';
 import { loadParticipants, searchAndRender } from './pages/participants.js';
 import { initAdminEnhancements, showTab, loadUsers, loadVehicles, loadParticipantsAdmin, loadConfigAndTrips, saveConfig, upsertTrip, upsertUser, upsertVehicle, upsertParticipant } from './pages/admin.js';
 
-const State = {
-  session: null,
-  user: null,
-  cfg: null,
-  mapTimer: null
-};
+const State = {  session: null,  user: null,  cfg: null,  mapTimer: null};
+
+function stopTrackingIfAny(){
+  try{ stopTrackingPublic(); }catch{}
+}
+
 
 // Expose dashboard detail actions (setelah State ada)
 window.showRegionDetails = ()=> State.session ? showRegionDetailsUI(State.session) : null;
@@ -56,6 +56,16 @@ document.addEventListener('DOMContentLoaded', async ()=>{
   }
 });
 
+// ✅ ketika app kembali aktif, nyalakan lagi tracking (kalau ada kendaraan terakhir)
+document.addEventListener('visibilitychange', ()=>{
+  try{
+    if (document.visibilityState !== 'visible') return;
+    if (!State?.session) return;
+    const last = String(localStorage.getItem('tt_last_vehicle_code') || '').trim();
+    if (last) startBackgroundTrackingPublic(State.session, last);
+  }catch{}
+});
+
 function hideLoadingSoon(){
   setTimeout(() => {
     const ls = $('#loadingScreen');
@@ -85,6 +95,14 @@ async function afterLoginInit(){
 
   showMainApp();
   await showDashboard();
+
+    // ✅ auto resume tracking jika user sudah punya kendaraan terakhir
+  try{
+    const last = String(localStorage.getItem('tt_last_vehicle_code') || '').trim();
+    if (last){
+      startBackgroundTrackingPublic(State.session, last);
+    }
+  }catch{}
 
   // Admin UI
   if ((State.session.role||'')==='admin'){
@@ -244,6 +262,7 @@ window.logout = async () => {
   clearSession();
   State.session = null;
   State.user = null;
+  try{ stopTrackingPublic({ silent:true }); }catch{}
   location.reload();
 };
 
@@ -270,13 +289,36 @@ window.showMap = async ()=>{
   // ✅ tunggu halaman map benar-benar tampil & layout settle
   await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
 
-  initMap(); // init cepat dulu
+  initMap();
 
   if (!State.session) return;
 
-  // ✅ refresh ringan dulu (tanpa manifest + fitBounds hanya pertama)
+  // refresh map dulu (tanpa manifest)
   await refreshMap(State.session, { includeManifest: 0, fitMode: 'first' });
 
+  // ✅ pilih kendaraan otomatis:
+  // 1) dari pending vehicle (hasil scan/penempatan)
+  // 2) fallback dari localStorage (kendaraan terakhir)
+  // (getPendingVehicle sudah Anda import dari scan.js)
+  let code = '';
+  try{
+    code = String(await getPendingVehicle(State.session) || '').trim();
+  }catch{}
+
+  if (!code){
+    code = String(localStorage.getItem('tt_last_vehicle_code') || '').trim();
+  }
+
+  if (code){
+    // simpan untuk fallback
+    localStorage.setItem('tt_last_vehicle_code', code);
+    // ✅ start tracking otomatis
+    startTrackingAutoPublic(State.session, code);
+  } else {
+    showNotification('Belum ada kendaraan terpilih. Scan kendaraan dulu di menu "Scan Kendaraan".', 'info');
+  }
+
+  // refresh map periodik (tanpa manifest)
   if (State.mapTimer) clearInterval(State.mapTimer);
   State.mapTimer = setInterval(()=>{
     refreshMap(State.session, { includeManifest: 0, fitMode: 'none' }).catch(()=>{});

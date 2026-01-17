@@ -1,5 +1,7 @@
 import * as api from '../core/api.js';
 import { $, showNotification, setButtonLoading } from '../core/ui.js';
+import { startBackgroundTrackingPublic } from './map.js';
+
 
 let qr = null;
 let pendingVehicle = null;
@@ -416,6 +418,36 @@ export async function confirmAssignment(session){
       `Berhasil. Ditambah: ${added} orang${moved?` • Dipindah dari kendaraan lain: ${moved}`:''}`,
       'success'
     );
+
+        // ✅ simpan kendaraan terakhir agar auto resume saat app dibuka lagi
+    try{
+      localStorage.setItem('tt_last_vehicle_code', vehicleCode);
+    }catch{}
+
+    // ✅ kirim lokasi SEKALI saat ini (biar langsung update)
+    try{
+      if (navigator.geolocation){
+        navigator.geolocation.getCurrentPosition(async (pos)=>{
+          try{
+            const lat = pos.coords.latitude;
+            const lng = pos.coords.longitude;
+            if (isFinite(lat) && isFinite(lng)){
+              await api.apiCall('updateLocation', {
+                sessionId: session.sessionId,
+                vehicleCode,
+                lat,
+                lng
+              });
+            }
+          }catch{}
+        }, ()=>{}, { enableHighAccuracy:true, timeout: 12000, maximumAge: 2000 });
+      }
+    }catch{}
+
+    // ✅ mulai tracking periodik selama app masih aktif
+    try{
+      startBackgroundTrackingPublic(session, vehicleCode);
+    }catch{}
 
     // ✅ setelah sukses: tetap tutup seperti sebelumnya
     $('#scanResult').style.display = 'none';

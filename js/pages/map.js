@@ -299,6 +299,26 @@ function prepareTrackingUI(session){
   });
 }
 
+// =========================================================
+// ✅ PUBLIC: tracking untuk dipakai di mana saja (tanpa harus buka Map)
+// - Dipanggil setelah Konfirmasi Penempatan
+// - Dipanggil lagi saat app dibuka kembali (auto resume)
+// =========================================================
+export function startBackgroundTrackingPublic(session, vehicleCode){
+  const code = String(vehicleCode||'').trim();
+  if (!code) return;
+
+  // set select tersembunyi (kompatibilitas)
+  const sel = document.getElementById('trackVehiclePick');
+  if (sel){
+    sel.innerHTML = `<option value="${esc(code)}">${esc(code)}</option>`;
+    sel.value = code;
+  }
+
+  // start tracking pakai kode yang dipaksa
+  startTracking(session, code);
+}
+
 export function initMap(){
   const el = document.getElementById('map');
   if (!el) return;
@@ -363,10 +383,11 @@ export function initMap(){
   tryInit(0);
 }
 
-function startTracking(session){
-  const sel = document.getElementById('trackVehiclePick');
-  const vehicleCode = (sel?.value || '').trim();
-  if (!vehicleCode) return showNotification('Pilih kendaraan dulu untuk tracking', 'error');
+function startTracking(session, forcedVehicleCode = ''){
+  const vehicleCode = String(forcedVehicleCode || '').trim()
+    || String(document.getElementById('trackVehiclePick')?.value || '').trim();
+
+  if (!vehicleCode) return showNotification('Kendaraan belum ditentukan. Scan kendaraan dulu.', 'error');
   if (!navigator.geolocation) return showNotification('Geolocation tidak didukung', 'error');
 
   // kalau sebelumnya masih tracking, stop dulu biar tidak dobel timer/watch
@@ -394,60 +415,44 @@ function startTracking(session){
 
     const lat = pos.coords.latitude;
     const lng = pos.coords.longitude;
-
-    // validasi dasar
     if (!isFinite(lat) || !isFinite(lng)) return;
 
     const now = Date.now();
 
-    // hitung jarak pindah dari titik terakhir yang pernah DIKIRIM
+    // jarak dari titik terakhir yang pernah DIKIRIM
     let movedM = 999999;
     if (tracking._lastSentCoord){
-      movedM = haversineM(
-        tracking._lastSentCoord.lat,
-        tracking._lastSentCoord.lng,
-        lat, lng
-      );
+      movedM = haversineM(tracking._lastSentCoord.lat, tracking._lastSentCoord.lng, lat, lng);
     }
 
     const isMoving = movedM >= TRACK_MIN_MOVE_M;
-
-    // throttle dinamis: bergerak 15s, diam 60s (+ jitter)
     const minGap = (isMoving ? TRACK_SEND_MOVING_MS : TRACK_SEND_IDLE_MS) + (tracking._jitterMs || 0);
 
     if (now - tracking.lastSentAt < minGap) return;
 
-    // ✅ boleh kirim kalau:
-    // - pertama kali, atau
-    // - bergerak >= 50m, atau
-    // - sudah lewat idle interval (tetap refresh posisi walau diam)
-    const allowSend = (!tracking._lastSentCoord) || isMoving || (now - tracking.lastSentAt >= TRACK_SEND_IDLE_MS + (tracking._jitterMs||0));
+    const allowSend =
+      (!tracking._lastSentCoord) ||
+      isMoving ||
+      (now - tracking.lastSentAt >= TRACK_SEND_IDLE_MS + (tracking._jitterMs||0));
+
     if (!allowSend) return;
 
     tracking.lastSentAt = now;
 
     try{
-      await api.updateLocation(
-        session.sessionId,
-        tracking.vehicleCode,
-        lat,
-        lng
-      );
-
-      // update titik terakhir yang sukses DIKIRIM
+      await api.updateLocation(session.sessionId, tracking.vehicleCode, lat, lng);
       tracking._lastSentCoord = { lat, lng };
-
     }catch(e){
-      // gagal kirim → jangan update _lastSentCoord
-      // biarkan retry pada loop berikutnya
+      // retry nanti
     }
   }, 1200);
 
-  setMapTrackingButtons(true);
-  showNotification('Kirim lokasi aktif untuk ' + tracking.vehicleCode, 'success');
+  // ✅ tidak perlu tombol UI
+  try{ setMapTrackingButtons(false); }catch{}
+  showNotification('Tracking otomatis aktif: ' + tracking.vehicleCode, 'success');
 }
 
-function stopTracking(){
+function stopTracking({ silent=false } = {}){
   if (tracking.watchId !== null){
     try{ navigator.geolocation.clearWatch(tracking.watchId); }catch{}
     tracking.watchId = null;
@@ -463,8 +468,8 @@ function stopTracking(){
   tracking.vehicleCode = '';
   tracking._jitterMs = 0;
 
-  setMapTrackingButtons(false);
-  showNotification('Kirim lokasi dihentikan', 'info');
+  try{ setMapTrackingButtons(false); }catch{}
+  if (!silent) showNotification('Kirim lokasi dihentikan', 'info');
 }
 
 function statusClass(st){
@@ -531,8 +536,6 @@ export async function refreshMap(session, { includeManifest = 0, fitMode = 'none
       lastManifestByVehicle = res.manifestByVehicle || {};
       Object.keys(lastManifestByVehicle).forEach(k=> manifestLoadedAt[k] = Date.now());
     }
-
-    prepareTrackingUI(session);
 
     // setelah trackbar muncul, invalidate sekali biar leaflet resize clean
     if (!invalidatedOnce){
@@ -621,6 +624,6 @@ export async function refreshMap(session, { includeManifest = 0, fitMode = 'none
   }
 }
 
-export function stopTrackingPublic(){
-  stopTracking();
+export function stopTrackingPublic({ silent=false } = {}){
+  stopTracking({ silent });
 }

@@ -273,18 +273,24 @@
             <!-- Map Page -->
             <div id="mapPage" class="content-page" style="display:none;">
                 <h1 class="page-title">Pemantauan Perjalanan Real-time</h1>
-                 <!-- ✅ Tracking Bar (dipindahkan dari map.js) -->
-                <div id="trackBar" class="map-trackbar" style="display:none;">
-                    <select id="trackVehiclePick" style="padding:12px 15px; border:2px solid #ddd; border-radius:8px;">
-                        <option value="">Pilih kendaraan...</option>
+                 <!-- ✅ Tracking Otomatis (tanpa tombol) -->
+                    <div id="trackBar" class="map-trackbar" style="display:none;">
+                    <!-- tetap disediakan elemen select agar kompatibel, tapi disembunyikan -->
+                    <select id="trackVehiclePick" style="display:none;">
+                        <option value="">-</option>
                     </select>
-                    <button class="btn-primary" id="btnStartTrack" type="button">
-                        <i class="fas fa-location-arrow"></i> Mulai Kirim Lokasi
-                    </button>
-                    <button class="btn-secondary" id="btnStopTrack" type="button" disabled style="display: none;">
-                        <i class="fas fa-stop"></i> Stop
-                    </button>
-                </div>
+
+                    <div id="trackInfo" style="
+                        padding:12px 14px;
+                        border:2px dashed #ddd;
+                        border-radius:10px;
+                        background:#fff;
+                        font-weight:800;
+                        color:#333;
+                    ">
+                        Tracking otomatis akan aktif saat halaman ini dibuka.
+                    </div>
+                    </div>
                 <div class="map-container">
                     <div id="map"></div>
                     <div class="map-controls">

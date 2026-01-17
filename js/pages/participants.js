@@ -27,10 +27,11 @@ export async function loadParticipants(session, filter='all'){
         const veh  = p.Vehicle || p.vehicle || '';
         return `${nama} ${nik} ${rel} ${reg} ${est} ${veh}`;
       },
-      renderRowHtml: (p)=> {
+      renderRowHtml: (p, idx)=> {
         const arrived = (p.Arrived===true || p.Arrived==='TRUE' || p.Arrived==='true');
         return `
           <tr>
+            <td>${idx}</td>
             <td>${esc(p.Nama||p.name||'-')}</td>
             <td>${esc(p.NIK||p.nik||'-')}</td>
             <td>${esc(p.Relationship||p.Category||p.relationship||'-')}</td>

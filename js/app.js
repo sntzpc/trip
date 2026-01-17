@@ -5,7 +5,7 @@ import { doLogin, bindLoginEnter } from './pages/login.js';
 import { loadDashboard, showRegionDetailsUI, hideRegionDetailsUI } from './pages/dashboard.js';
 import { initMap, refreshMap, stopTrackingPublic  } from './pages/map.js';
 import { startScanning, manualSubmit, confirmAssignment, getPendingVehicle } from './pages/scan.js';
-import { renderFamily, confirmArrival as doConfirmArrival } from './pages/arrival.js';
+import { renderFamily, confirmArrival as doConfirmArrival, initArrivalPage  } from './pages/arrival.js';
 import { loadParticipants, searchAndRender } from './pages/participants.js';
 import { initAdminEnhancements, showTab, loadUsers, loadVehicles, loadParticipantsAdmin, loadConfigAndTrips, saveConfig, upsertTrip, upsertUser, upsertVehicle, upsertParticipant } from './pages/admin.js';
 
@@ -80,6 +80,8 @@ async function afterLoginInit(){
   // Load family too
   const famRes = await api.apiCall('getFamily', { sessionId: State.session.sessionId, nik: State.session.userId, tripId: State.session.activeTripId || '' });
   State.user.family = famRes.family || [];
+
+  State.session.user = State.user;
 
   showMainApp();
   await showDashboard();
@@ -223,6 +225,8 @@ window.login = async () => {
       estate: res.user?.estate,
       family: res.family || []
     };
+
+    State.session.user = State.user;
     showMainApp();
     if (State.session.role === 'admin'){
       $('#adminMenu') && ($('#adminMenu').style.display = 'flex');
@@ -283,6 +287,11 @@ window.showArrival = async ()=>{
   activateMenu(document.querySelectorAll('.menu-item')[3]);
   showPage('arrivalPage');
   closeSidebarOnMobile();
+
+  // ✅ lock otomatis jika sudah Arrived
+  if (State.session && State.user){
+    await initArrivalPage(State.session, State.user);
+  }
 };
 
 window.showParticipants = async ()=>{
@@ -308,8 +317,7 @@ window.startScanning = ()=> State.session ? startScanning(State.session) : showN
 window.manualVehicleSubmit = ()=> State.session ? manualSubmit(State.session) : showNotification('Silakan login dulu','error');
 window.confirmAssignment = async ()=>{
   if (!State.session || !State.user) return;
-  const nikList = [State.user.nik, ...(State.user.family||[]).map(m=>m.nik)];
-  await confirmAssignment(State.session, nikList);
+  await confirmAssignment(State.session);
 };
 
 // Arrival

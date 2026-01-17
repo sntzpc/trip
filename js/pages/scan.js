@@ -418,6 +418,15 @@ export async function confirmAssignment(session){
     }
 
     const res = await api.apiCall('assignVehicleStrict', payload);
+    // ✅ Jika offline (queued), simpan hint agar map drawer bisa tampilkan penumpang
+    try{
+      if (res?.queued){
+        // kita pakai api.getVehicleManifestOffline() yang membaca queue,
+        // jadi tidak perlu simpan apa-apa lagi.
+        // Tapi kita simpan last vehicle juga sudah ada.
+        showNotification('Mode offline: penempatan disimpan di antrian. Peta akan menampilkan lokasi Anda (kendaraan ini) dan daftar penumpang dari antrian.', 'info', 4500);
+      }
+    }catch{}
     if (!res.success) throw new Error(res.message || 'Gagal assign');
 
     const moved = (res.moved||[]).length;

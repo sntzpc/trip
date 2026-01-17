@@ -1,5 +1,5 @@
 import * as api from '../core/api.js';
-import { $ } from '../core/ui.js';
+import { $, showNotification } from '../core/ui.js';
 import { createTablePager } from '../core/table_pager.js';
 
 let arrivedPager = null;
@@ -7,41 +7,251 @@ let arrivedPager = null;
 // ===== Drilldown modal (STEP: Region -> Unit -> Table) =====
 let drill = null;
 
+// ============================
+// ✅ Modal Styles (inject once)
+// ============================
+let _ddStyleInjected = false;
+function injectDrillStyles(){
+  if (_ddStyleInjected) return;
+  _ddStyleInjected = true;
+
+  const st = document.createElement('style');
+  st.id = 'dashDrillStyles';
+  st.textContent = `
+    .dd-backdrop{
+      position:fixed; inset:0; z-index:5000;
+      display:none;
+      background:rgba(0,0,0,.45);
+      backdrop-filter: blur(3px);
+      -webkit-backdrop-filter: blur(3px);
+      padding:12px;
+    }
+    .dd-modal{
+      position:relative;
+      max-width:1100px;
+      margin:auto;
+      height: min(760px, calc(100dvh - 24px));
+      background:#fff;
+      border-radius:18px;
+      overflow:hidden;
+      box-shadow:0 18px 50px rgba(0,0,0,.22);
+      display:flex;
+      flex-direction:column;
+    }
+    .dd-head{
+      position:sticky; top:0;
+      background:linear-gradient(180deg,#ffffff 0%, #fbfbfb 100%);
+      border-bottom:1px solid #eee;
+      padding:12px 14px;
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:10px;
+      z-index:2;
+    }
+    .dd-title{
+      font-weight:1000;
+      font-size:16px;
+      letter-spacing:.2px;
+      display:flex;
+      align-items:center;
+      gap:8px;
+      flex-wrap:wrap;
+    }
+    .dd-sub{
+      font-size:12px;
+      color:#6b7280;
+      margin-top:3px;
+      font-weight:700;
+    }
+    .dd-actions{
+      display:flex; gap:8px; align-items:center;
+    }
+    .dd-btn{
+      padding:10px 12px;
+      border:2px solid #e5e7eb;
+      border-radius:12px;
+      background:#fff;
+      font-weight:900;
+      cursor:pointer;
+      display:inline-flex;
+      align-items:center;
+      gap:8px;
+      user-select:none;
+      touch-action: manipulation;
+    }
+    .dd-btn:active{ transform: translateY(1px); }
+    .dd-body{
+      padding:12px;
+      flex:1;
+      min-height:0;
+      display:flex;
+      flex-direction:column;
+      gap:12px;
+    }
+    .dd-breadcrumb{
+      font-size:12px;
+      color:#374151;
+      font-weight:800;
+      background:#f8fafc;
+      border:1px solid #eef2f7;
+      padding:10px 12px;
+      border-radius:14px;
+    }
+    .dd-cards{
+      display:grid;
+      grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+      gap:10px;
+      overflow:auto;
+      padding:4px;
+      max-height:260px;
+      border-radius:14px;
+      background:linear-gradient(180deg,#fff 0%, #fafafa 100%);
+      border:1px solid #eef2f7;
+    }
+    .dd-card{
+      text-align:left;
+      padding:12px 12px;
+      border:1px solid #eef2f7;
+      border-radius:14px;
+      background:#fff;
+      cursor:pointer;
+      box-shadow:0 6px 14px rgba(0,0,0,.06);
+      transition:transform .08s ease, box-shadow .08s ease;
+    }
+    .dd-card:hover{
+      box-shadow:0 10px 22px rgba(0,0,0,.10);
+      transform:translateY(-1px);
+    }
+    .dd-card-top{
+      display:flex; justify-content:space-between; gap:10px; align-items:center;
+    }
+    .dd-card-label{
+      font-weight:1000;
+      white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+    }
+    .dd-pill{
+      background:#eef2ff;
+      color:#1e3a8a;
+      padding:6px 12px;
+      border-radius:999px;
+      font-size:12px;
+      font-weight:1000;
+      white-space:nowrap;
+    }
+    .dd-card-sub{
+      font-size:12px;
+      font-weight:800;
+      color:#6b7280;
+      margin-top:6px;
+    }
+    .dd-tableBlock{
+      border:1px solid #eef2f7;
+      border-radius:16px;
+      overflow:hidden;
+      min-height:0;
+      background:#fff;
+
+      /* ✅ penting: biar tabel bisa ambil tinggi & scroll */
+      display:flex;
+      flex-direction:column;
+      flex: 1 1 auto;
+    }
+    .dd-tableHead{
+      padding:10px 12px;
+      font-weight:1000;
+      border-bottom:1px solid #eef2f7;
+      display:flex;
+      justify-content:space-between;
+      align-items:center;
+      gap:10px;
+      flex-wrap:wrap;
+    }
+    .dd-tableWrap{
+      padding:10px;
+      min-height:0;
+
+      /* ✅ scroll area */
+      overflow:auto;
+      -webkit-overflow-scrolling: touch;
+      flex: 1 1 auto;
+    }
+
+    /* ✅ Mobile: modal jadi "bottom sheet" nyaman */
+    @media (max-width: 768px){
+      .dd-backdrop{ padding:0; }
+      .dd-modal{
+        max-width:none;
+        width:100%;
+        height: calc(100dvh);
+        border-radius:18px 18px 0 0;
+        margin: 0;
+        position:absolute;
+        left:0; right:0; bottom:0;
+      }
+      .dd-cards{
+        grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+        max-height:280px;
+      }
+      .dd-btn{ padding:10px 10px; border-radius:12px; }
+    }
+
+    /* Safe area iOS */
+    @supports (padding: max(0px)) {
+      .dd-modal{
+        padding-bottom: max(0px, env(safe-area-inset-bottom));
+      }
+    }
+  `;
+  document.head.appendChild(st);
+}
+
 function ensureDrillModal(){
+  injectDrillStyles();
   if (drill) return drill;
 
   const wrap = document.createElement('div');
   wrap.id = 'dashDrillModal';
-  wrap.style.position = 'fixed';
-  wrap.style.inset = '0';
-  wrap.style.zIndex = '5000';
+  wrap.className = 'dd-backdrop';
   wrap.style.display = 'none';
-  wrap.style.background = 'rgba(0,0,0,.45)';
-  wrap.style.backdropFilter = 'blur(2px)';
 
   wrap.innerHTML = `
-    <div style="position:absolute; inset:12px; max-width:1100px; margin:auto; background:#fff; border-radius:16px; overflow:hidden; box-shadow:0 12px 30px rgba(0,0,0,.18); display:flex; flex-direction:column;">
-      <div style="display:flex; align-items:center; justify-content:space-between; padding:12px 14px; border-bottom:1px solid #eee;">
-        <div>
-          <div id="ddTitle" style="font-weight:900; font-size:16px;">Detail</div>
-          <div id="ddSub" style="font-size:12px; color:#666; margin-top:2px;">—</div>
+    <div class="dd-modal" role="dialog" aria-modal="true">
+      <div class="dd-head">
+        <div style="min-width:0;">
+          <div class="dd-title">
+            <span id="ddTitle">Detail</span>
+          </div>
+          <div id="ddSub" class="dd-sub">—</div>
         </div>
-        <div style="display:flex; gap:8px; align-items:center;">
-          <button id="ddBack" type="button" style="display:none; padding:10px 12px; border:2px solid #ddd; border-radius:10px; background:#fff; font-weight:800; cursor:pointer;">Kembali</button>
-          <button id="ddClose" type="button" style="padding:10px 12px; border:2px solid #ddd; border-radius:10px; background:#fff; font-weight:800; cursor:pointer;">Tutup</button>
+
+        <div class="dd-actions">
+          <button id="ddBack" type="button" class="dd-btn" style="display:none;">
+            <i class="fas fa-arrow-left"></i><span>Kembali</span>
+          </button>
+          <button id="ddClose" type="button" class="dd-btn">
+            <i class="fas fa-xmark"></i><span>Tutup</span>
+          </button>
         </div>
       </div>
 
-      <div style="padding:12px; flex:1; min-height:0;">
-        <!-- STEP CARDS -->
-        <div id="ddCardsWrap" style="display:grid; grid-template-columns:repeat(auto-fill, minmax(200px, 1fr)); gap:10px; overflow:auto; max-height:240px; padding:4px;">
-        </div>
+      <div class="dd-body">
+        <div id="ddCrumb" class="dd-breadcrumb">—</div>
 
-        <!-- TABLE (muncul di step 2) -->
-        <div id="ddTableBlock" style="display:none; margin-top:12px; border:1px solid #eee; border-radius:14px; overflow:hidden; min-height:0;">
-          <div style="padding:10px 12px; font-weight:900; border-bottom:1px solid #eee;">Daftar Peserta</div>
-          <div class="participant-table-container" id="ddTableWrap" style="padding:10px; min-height:0;">
-            <table class="participant-table" style="width:100%;">
+        <!-- Level 1 cards (Region) -->
+        <div id="ddCardsL1" class="dd-cards"></div>
+
+        <!-- Level 2 cards (Unit) -->
+        <div id="ddCardsL2" class="dd-cards" style="display:none;"></div>
+
+        <div id="ddTableBlock" class="dd-tableBlock" style="display:none;">
+          <div class="dd-tableHead">
+            <div style="font-weight:1000;">Daftar Peserta</div>
+            <div id="ddCount" style="font-size:12px; font-weight:900; color:#6b7280;">0</div>
+          </div>
+
+          <div class="participant-table-container dd-tableWrap" id="ddTableWrap">
+            <table class="participant-table" style="width:100%; min-width:720px;">
               <thead>
                 <tr>
                   <th style="width:64px;">No.</th>
@@ -72,10 +282,16 @@ function ensureDrillModal(){
     titleEl: wrap.querySelector('#ddTitle'),
     subEl: wrap.querySelector('#ddSub'),
     backBtn: wrap.querySelector('#ddBack'),
-    cardsWrap: wrap.querySelector('#ddCardsWrap'),
+    cardsL1: wrap.querySelector('#ddCardsL1'),
+    cardsL2: wrap.querySelector('#ddCardsL2'),
     tableBlock: wrap.querySelector('#ddTableBlock'),
     tableWrap: wrap.querySelector('#ddTableWrap'),
     tbodyEl: wrap.querySelector('#ddTbody'),
+
+    // ✅ WAJIB (agar renderDrill tidak error)
+    crumbEl: wrap.querySelector('#ddCrumb'),
+    countEl: wrap.querySelector('#ddCount'),
+
     pager: null,
 
     // state
@@ -136,34 +352,25 @@ function groupCount(list, keyFn){
 
 function cardHtml(label, count, sub=''){
   return `
-    <button type="button"
-      style="
-        text-align:left;
-        padding:12px 12px;
-        border:2px solid #eee;
-        border-radius:14px;
-        background:#fff;
-        cursor:pointer;
-        font-weight:900;
-        box-shadow:0 4px 10px rgba(0,0,0,.06);
-      ">
-      <div style="display:flex; justify-content:space-between; gap:10px; align-items:center;">
+    <button type="button" class="dd-card">
+      <div class="dd-card-top">
         <div style="min-width:0;">
-          <div style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(label)}</div>
-          ${sub ? `<div style="font-size:12px; font-weight:700; color:#666; margin-top:2px;">${escapeHtml(sub)}</div>` : ``}
+          <div class="dd-card-label">${escapeHtml(label)}</div>
+          ${sub ? `<div class="dd-card-sub">${escapeHtml(sub)}</div>` : ``}
         </div>
-        <div style="background:#ecf0f1; padding:6px 12px; border-radius:999px; font-size:12px; font-weight:900;">${count}</div>
+        <div class="dd-pill">${count}</div>
       </div>
     </button>
   `;
 }
 
-function renderCards(items, onClick){
-  // items: [{label,count,sub,dataKey}]
-  drill.cardsWrap.innerHTML = items.map(it => cardHtml(it.label, it.count, it.sub)).join('')
+function renderCards(containerEl, items, onClick){
+  if (!containerEl) return;
+
+  containerEl.innerHTML = items.map(it => cardHtml(it.label, it.count, it.sub)).join('')
     || `<div style="color:#777;padding:8px;">Tidak ada data.</div>`;
 
-  Array.from(drill.cardsWrap.querySelectorAll('button')).forEach((btn, idx)=>{
+  Array.from(containerEl.querySelectorAll('button')).forEach((btn, idx)=>{
     btn.addEventListener('click', ()=> onClick(items[idx]));
   });
 }
@@ -173,53 +380,66 @@ function renderDrill(){
   if (!drill) return;
 
   const all = drill.all || [];
-  const step = drill.step;
+  const step = drill.step; // 0=Region, 1=Unit, 2=Table
 
-  // Back button state
+  // tombol back
   drill.backBtn.style.display = (step === 0) ? 'none' : 'inline-block';
 
-  // Hide table by default
+  // visibilitas fokus per step
   drill.tableBlock.style.display = (step === 2) ? '' : 'none';
+  drill.cardsL1.style.display = (step === 0) ? '' : 'none';
+  drill.cardsL2.style.display = (step === 1) ? '' : 'none';
 
+  // reset scroll table saat tidak di table
+  if (step !== 2){
+    try{ drill.tableWrap.scrollTop = 0; }catch{}
+  }
+
+  // ---------- STEP 0: REGION ----------
   if (step === 0){
-    // REGION cards
     drill.titleEl.textContent = drill.titleBase;
+    drill.subEl.textContent = 'Pilih Region';
+    drill.crumbEl.textContent = `📌 ${drill.titleBase} / Region`;
+
+    // group region
     const byRegion = groupCount(all, p => p.Region);
     const regions = Object.entries(byRegion)
       .sort((a,b)=>b[1]-a[1])
       .map(([label,count])=>({ label, count, sub:'Klik untuk lihat Unit', key: label }));
 
-    drill.subEl.textContent = `${all.length} peserta • pilih Region`;
-    renderCards(regions, (it)=>{
+    renderCards(drill.cardsL1, regions, (it)=>{
       drill.selectedRegion = it.key;
       drill.step = 1;
       renderDrill();
     });
+
     return;
   }
 
+  // ---------- STEP 1: UNIT ----------
   if (step === 1){
-    // UNIT cards in selected region
     const region = drill.selectedRegion || '';
     const inRegion = all.filter(p => String(p.Region||'Unknown') === String(region));
 
     drill.titleEl.textContent = `${drill.titleBase} • ${region}`;
-    drill.subEl.textContent = `${inRegion.length} peserta • pilih Unit`;
+    drill.subEl.textContent = 'Pilih Unit';
+    drill.crumbEl.textContent = `📌 ${drill.titleBase} / ${region} / Unit`;
 
     const byUnit = groupCount(inRegion, p => p.Estate);
     const units = Object.entries(byUnit)
       .sort((a,b)=>b[1]-a[1])
       .map(([label,count])=>({ label, count, sub:'Klik untuk lihat daftar peserta', key: label }));
 
-    renderCards(units, (it)=>{
+    renderCards(drill.cardsL2, units, (it)=>{
       drill.selectedUnit = it.key;
       drill.step = 2;
       renderDrill();
     });
+
     return;
   }
 
-  // step === 2 => TABLE
+  // ---------- STEP 2: TABLE ----------
   const region = drill.selectedRegion || '';
   const unit = drill.selectedUnit || '';
 
@@ -228,8 +448,15 @@ function renderDrill(){
 
   drill.titleEl.textContent = `${drill.titleBase} • ${region} • ${unit}`;
   drill.subEl.textContent = `${inUnit.length} peserta`;
+  drill.crumbEl.textContent = `📌 ${drill.titleBase} / ${region} / ${unit}`;
+  drill.countEl && (drill.countEl.textContent = `${inUnit.length} peserta`);
 
-  // ensure pager
+  // ✅ pastikan tableWrap benar-benar scroll
+  try{
+    drill.tableWrap.style.overflow = 'auto';
+    drill.tableWrap.style.webkitOverflowScrolling = 'touch';
+  }catch{}
+
   if (!drill.pager){
     drill.pager = createTablePager({
       containerEl: drill.tableWrap,
@@ -247,6 +474,7 @@ function renderDrill(){
       `
     });
   }
+
   drill.pager.setData(inUnit);
 }
 
@@ -351,11 +579,24 @@ async function bindStatCardClicks(session){
     return res.participants || [];
   }
 
-  async function fetchVehicles(){
-    const tripId = session?.activeTripId || '';
+  async function fetchVehiclesSmart(){
+  const tripId = session?.activeTripId || '';
+
+  // 1) coba adminGet (kalau admin + online)
+  try{
     const vRes = await api.adminGet(session.sessionId, 'vehicles', tripId);
-    return vRes.vehicles || [];
-  }
+    if (vRes && Array.isArray(vRes.vehicles)) return vRes.vehicles;
+  }catch(e){}
+
+  // 2) fallback: getVehicles list biasa (lebih aman untuk user & offline-cache)
+  try{
+    const vRes2 = await api.getVehicles(session.sessionId, tripId, '');
+    if (vRes2 && Array.isArray(vRes2.vehicles)) return vRes2.vehicles;
+    // kadang backend mengembalikan {vehicle:...} jika q, tapi q='' harusnya list
+  }catch(e){}
+
+  return [];
+}
 
   // helper bind once
   const bindOnce = (el, fn)=>{
@@ -373,7 +614,11 @@ async function bindStatCardClicks(session){
 
   // 1: Kendaraan -> tampilkan KARTU KENDARAAN -> klik => tabel penumpang
   bindOnce(cards[1], async ()=>{
-    await showVehicleDrill(session);
+    try{
+      await showVehicleDrill(session);
+    }catch(e){
+      showNotification(e?.message || 'Gagal memuat data kendaraan', 'error');
+    }
   });
 
   // 2: Telah Tiba -> peserta arrived
@@ -385,7 +630,18 @@ async function bindStatCardClicks(session){
 
   // 3: Dalam Perjalanan -> peserta (kendaraan on_the_way) dan belum arrived
   bindOnce(cards[3], async ()=>{
-    const [parts, vehicles] = await Promise.all([fetchAllParticipants(), fetchVehicles()]);
+    let parts = [];
+    let vehicles = [];
+    try{
+      [parts, vehicles] = await Promise.all([fetchAllParticipants(), fetchVehiclesSmart()]);
+    }catch(e){
+      showNotification(e?.message || 'Gagal memuat data untuk drilldown "Dalam Perjalanan"', 'error');
+      return;
+    }
+
+    if (!vehicles.length){
+      showNotification('Data kendaraan tidak tersedia (mungkin offline dan cache belum lengkap). Coba login saat online dulu untuk warmup.', 'warning', 4500);
+    }
     const onRoadCodes = new Set(
       vehicles
         .filter(v => String(v.Status||'').toLowerCase() === 'on_the_way')
@@ -549,6 +805,7 @@ function renderVehicleDrill(){
   const step = vdrill.step;
   vdrill.backBtn.style.display = (step === 0) ? 'none' : 'inline-block';
   vdrill.tableBlock.style.display = (step === 1) ? '' : 'none';
+  vdrill.cardsWrap.style.display = (step === 0) ? '' : 'none';
 
   if (step === 0){
     vdrill.titleEl.textContent = 'Detail Kendaraan';
@@ -632,13 +889,29 @@ async function showVehicleDrill(session){
   ensureVehicleModal();
 
   const tripId = session?.activeTripId || '';
-  const [vRes, pRes] = await Promise.all([
-    api.adminGet(session.sessionId, 'vehicles', tripId),
-    api.getParticipants(session.sessionId, tripId, 'all')
-  ]);
+  let vRes, pRes;
 
-  vdrill.vehicles = vRes.vehicles || [];
-  vdrill.participants = pRes.participants || [];
+  try{
+    // coba adminGet dulu
+    [vRes, pRes] = await Promise.all([
+      api.adminGet(session.sessionId, 'vehicles', tripId),
+      api.getParticipants(session.sessionId, tripId, 'all')
+    ]);
+  }catch(_){
+    // fallback: getVehicles list biasa
+    [vRes, pRes] = await Promise.all([
+      api.getVehicles(session.sessionId, tripId, ''),
+      api.getParticipants(session.sessionId, tripId, 'all')
+    ]);
+  }
+
+  // normalisasi shape agar vdrill.vehicles aman
+  vdrill.vehicles = vRes?.vehicles || [];
+  vdrill.participants = pRes?.participants || [];
+
+  if (!vdrill.vehicles.length){
+    showNotification('Data kendaraan tidak tersedia. Pastikan sudah login saat online agar cache terisi.', 'warning', 4500);
+  }
 
   vdrill.step = 0;
   vdrill.selectedCode = '';

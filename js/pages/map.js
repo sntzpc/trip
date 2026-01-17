@@ -251,8 +251,17 @@ function renderDrawer(code){
 
 async function ensureManifestForVehicle(session, code, { force=false } = {}){
   if (!session) throw new Error('Session tidak ada');
+  const tripId = session?.activeTripId || '';
 
-  // ✅ kalau tidak force: masih pakai cache 60 detik
+  // ✅ OFFLINE: pakai cache/queue/participants
+  if (navigator.onLine === false){
+    const list = await api.getVehicleManifestOffline(tripId, code);
+    lastManifestByVehicle[code] = Array.isArray(list) ? list : [];
+    manifestLoadedAt[code] = Date.now();
+    return;
+  }
+
+  // ✅ ONLINE: cache TTL 60 detik
   const ts = manifestLoadedAt[code] || 0;
   if (!force && lastManifestByVehicle[code] && (Date.now() - ts < 60000)) return;
 
@@ -260,7 +269,6 @@ async function ensureManifestForVehicle(session, code, { force=false } = {}){
   manifestLoading[code] = true;
 
   try{
-    const tripId = session?.activeTripId || '';
     const res = await api.getMapData(session.sessionId, tripId, 1);
 
     lastManifestByVehicle = res.manifestByVehicle || {};
@@ -521,7 +529,20 @@ export async function refreshMap(session, { includeManifest = 0, fitMode = 'none
     const tripId = session?.activeTripId || '';
 
     // ✅ default: includeManifest=0 agar tidak freeze
-    const res = await api.getMapData(session.sessionId, tripId, includeManifest ? 1 : 0);
+    let res;
+      if (navigator.onLine === false){
+        res = await api.getMapDataOffline(session.sessionId, tripId);
+        // kalau includeManifest diminta, coba ambil cache manifest juga
+        if (includeManifest){
+          const cachedFull = await api.apiCall('getMapData', { sessionId: session.sessionId, tripId, includeManifest: 1 })
+            .catch(()=>null);
+          if (cachedFull?.manifestByVehicle){
+            res.manifestByVehicle = cachedFull.manifestByVehicle;
+          }
+        }
+      } else {
+        res = await api.getMapData(session.sessionId, tripId, includeManifest ? 1 : 0);
+      }
 
     const vehicles = res.vehicles || [];
 

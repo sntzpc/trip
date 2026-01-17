@@ -270,6 +270,14 @@ export async function apiCall(action, params = {}, { timeoutMs = 20000 } = {}){
       // kalau tidak ketemu, lanjut ke mekanisme cacheKey biasa (kalau pernah tersimpan spesifik q)
     }
   }
+  // ✅ OFFLINE: updateLocation disimpan ke QUEUE (khusus offline saja)
+  // supaya map bisa tampil posisi kendaraan Anda saat offline
+  if (!isOnline() && action === 'updateLocation'){
+    const opId = uuid();
+    const toQueue = { ...(params||{}), _opId: opId };
+    try{ await queueAdd({ opId, action, params: toQueue }); }catch{}
+    return { success:true, queued:true, opId, offline:true, message:'Lokasi disimpan (offline). Akan dikirim saat online.' };
+  }
 
   // 3) kalau offline dan aksi bisa di-cache, kembalikan cache dulu
   if (!isOnline() && ck){
@@ -353,49 +361,170 @@ export async function apiCall(action, params = {}, { timeoutMs = 20000 } = {}){
   }
 }
 
-// =====================
-// Sync Queue Processor (legacy helper)
-// =====================
-export async function processOfflineQueue(sessionId, { max = 50 } = {}){
-  if (!isOnline()) return { success:false, message:'Offline', processed:0 };
+// =============================
+// ✅ Offline helpers for MAP
+// - mengambil lokasi dari cache map terakhir + queue updateLocation
+// - mengambil manifest dari cache map includeManifest + queue assignVehicleStrict
+// =============================
 
-  const items = await queueList({});
-  const pending = items
-    .filter(x => x.status === 'pending' || x.status === 'failed')
-    .slice(0, max);
+async function _getCached(action, params){
+  try{
+    const ck = cacheKey(action, params); // ✅ pakai yang sudah ada
+    const rec = await kvGet(ck);
+    return rec?.value || null;
+  }catch{ return null; }
+}
 
-  let processed = 0;
+// ambil lokasi terakhir kendaraan dari QUEUE updateLocation
+async function _getQueuedLastLocationsByVehicle(){
+  const out = {}; // { [vehicleCode]: {lat,lng,ts} }
+  try{
+    const list = await queueList({});
+    for (const it of list || []){
+      if (!it || it.status === 'synced') continue;
+      if (it.action !== 'updateLocation') continue;
 
-  for (const it of pending){
-    const id = it.id;
-    const action = it.action;
-    const params = { ...(it.params||{}), sessionId };
-    const now = Date.now();
+      const p = it.params || {};
+      const code = String(p.vehicleCode || '').trim();
+      const lat = Number(p.lat);
+      const lng = Number(p.lng);
+      if (!code || !isFinite(lat) || !isFinite(lng)) continue;
 
-    try{
-      await queueUpdate(id, {
-        status:'sending',
-        lastAttemptAt: now,
-        attempts: (it.attempts||0)+1,
-        lastError:''
-      });
-
-      const res = await apiCall(action, params, { timeoutMs: 25000 });
-
-      if (res && res.success !== false){
-        await queueUpdate(id, { status:'synced', result: res, syncedAt: Date.now(), lastError:'' });
-      } else {
-        await queueUpdate(id, { status:'failed', result: res, lastError: (res?.message||'Gagal') });
+      const ts = Number(it.createdAt || it.lastAttemptAt || Date.now());
+      if (!out[code] || ts > out[code].ts){
+        out[code] = { lat, lng, ts };
       }
-      processed++;
-
-    } catch(e){
-      await queueUpdate(id, { status:'failed', lastError: String(e?.message||e) });
-      processed++;
     }
+  }catch{}
+  return out;
+}
+
+// ambil nikList pending dari QUEUE assignVehicleStrict / assignVehicle
+async function _getQueuedAssignments(){
+  // { [vehicleCode]: { nikList:[], ts, opId } }
+  const out = {};
+  try{
+    const list = await queueList({});
+    for (const it of list || []){
+      if (!it || it.status === 'synced') continue;
+      if (!(it.action === 'assignVehicleStrict' || it.action === 'assignVehicle')) continue;
+
+      const p = it.params || {};
+      const code = String(p.vehicleCode || '').trim();
+      if (!code) continue;
+
+      let nikList = [];
+      try{
+        if (Array.isArray(p.nikList)) nikList = p.nikList;
+        else if (typeof p.nikList === 'string') nikList = JSON.parse(p.nikList);
+      }catch{}
+
+      nikList = (nikList || []).map(x=>String(x||'').trim()).filter(Boolean);
+      if (!nikList.length) continue;
+
+      const ts = Number(it.createdAt || Date.now());
+      if (!out[code] || ts > out[code].ts){
+        out[code] = { nikList, ts, opId: it.opId || '' };
+      }
+    }
+  }catch{}
+  return out;
+}
+
+// ✅ PUBLIC: ambil map data offline-first
+export async function getMapDataOffline(sessionId, tripId){
+  // 1) cache map terakhir (tanpa manifest)
+  const cached = await _getCached('getMapData', { tripId, includeManifest: 0 }) 
+              || await _getCached('getMapData', { tripId, includeManifest: 1 });
+
+  // struktur default
+  const base = cached || { success:true, offline:true, vehicles:[], manifestByVehicle:{} };
+
+  // 2) overlay lokasi dari queue updateLocation
+  const lastLoc = await _getQueuedLastLocationsByVehicle();
+
+  const vehicles = Array.isArray(base.vehicles) ? base.vehicles.map(v=>({ ...v })) : [];
+  const vehiclesByCode = {};
+  vehicles.forEach(v=>{
+    const code = String(v?.code||v?.Code||'').trim();
+    if (code) vehiclesByCode[code] = v;
+  });
+
+  Object.entries(lastLoc).forEach(([code, loc])=>{
+    // pastikan kendaraan ada (kalau tidak ada di cache, buat minimal record)
+    let v = vehiclesByCode[code];
+    if (!v){
+      v = { code, type:'', status:'on_the_way', currentLocation:{} };
+      vehicles.push(v);
+      vehiclesByCode[code] = v;
+    }
+    v.currentLocation = { lat: loc.lat, lng: loc.lng, ts: loc.ts, source:'queue' };
+  });
+
+  return {
+    ...base,
+    offline: true,
+    vehicles,
+    manifestByVehicle: base.manifestByVehicle || {}
+  };
+}
+
+// ✅ PUBLIC: ambil manifest offline-first untuk 1 vehicle
+export async function getVehicleManifestOffline(tripId, vehicleCode){
+  const code = String(vehicleCode||'').trim();
+  if (!code) return [];
+
+  // 1) dari cache getMapData(includeManifest=1)
+  const cached = await _getCached('getMapData', { tripId, includeManifest: 1 });
+  const byVeh = cached?.manifestByVehicle || {};
+  if (Array.isArray(byVeh[code]) && byVeh[code].length) return byVeh[code];
+
+  // 2) fallback: dari cache participants all (pakai field Vehicle)
+  const pAll = await _getCached('getParticipants', { tripId, filter:'all' });
+  const src = (pAll?.participants || []);
+  const rows = [];
+
+  for (const p of src){
+    const veh = normStr(p?.Vehicle ?? p?.vehicle ?? '');
+    if (veh !== code) continue;
+
+    rows.push({
+      nik: getNik(p),
+      nama: getNama(p) || getNik(p),
+      rel:  getRel(p) || (p?.Category || ''),
+      region: normStr(p?.Region ?? p?.region ?? ''),
+      estate: normStr(p?.Estate ?? p?.estate ?? ''),
+      arrived: getArrivedField(p),
+      arrivedAt: p?.ArrivalTime || p?.arrivedAt || ''
+    });
   }
 
-  return { success:true, processed };
+  if (rows.length) return rows;
+
+  // 3) terakhir: dari queue assignVehicleStrict (nikList)
+  const qa = await _getQueuedAssignments();
+  const qit = qa[code];
+  if (!qit) return [];
+
+  // map nik->data participant kalau ada
+  const map = new Map();
+  (pAll?.participants || []).forEach(p=>{
+    const nik = String(p.NIK||p.nik||'').trim();
+    if (nik) map.set(nik, p);
+  });
+
+  return qit.nikList.map(nik=>{
+  const p = map.get(nik) || {};
+  return {
+    nik,
+    nama: getNama(p) || nik,
+    rel:  getRel(p) || (p?.Category || ''),
+    region: normStr(p?.Region ?? p?.region ?? ''),
+    estate: normStr(p?.Estate ?? p?.estate ?? ''),
+    arrived: getArrivedField(p),
+    arrivedAt: p?.ArrivalTime || p?.arrivedAt || ''
+  };
+});
 }
 
 // =====================
@@ -491,6 +620,11 @@ export async function processQueue(sessionId, { maxItems = 50 } = {}){
   for (const item of list.slice(0, maxItems)){
     const id = item.id;
     try{
+      if (item.action === 'updateLocation'){
+        await queueUpdate(item.id, { status: 'synced', result: { success:true, skipped:true, message:'updateLocation di-skip (realtime)' }, syncedAt: Date.now() });
+        processed++;
+        continue;
+      }
       await queueUpdate(id, { attempts:(item.attempts||0)+1, lastAttemptAt:Date.now(), lastError:'' });
 
       const p = item.params || {};

@@ -4,6 +4,48 @@ export const API = {
   url: 'https://script.google.com/macros/s/AKfycbyKnP2oqjMMDyVuadCba839aSM_pnm4y4VBTS-DMyBoQEvApBJ-tEi2uUUbt5wqtWvF/exec'
 };
 
+import { kvGet, kvSet, queueAdd, queueList, queueUpdate } from './idb.js';
+
+function isOnline(){
+  try{ return navigator.onLine !== false; }catch{ return true; }
+}
+
+function uuid(){
+  try{ return crypto.randomUUID(); }catch{}
+  return 'op_' + Date.now() + '_' + Math.random().toString(16).slice(2);
+}
+
+const CACHEABLE = new Set([
+  'getConfig',
+  'getUserData',
+  'getFamily',
+  'getDashboardData',
+  'getMapData',
+  'getVehicles',
+  'getParticipants',
+  'adminGetData'
+]);
+
+const QUEUEABLE = new Set([
+  'assignVehicle',
+  'assignVehicleStrict',
+  'confirmArrival',
+  'adminUpdate',
+  'changePassword'
+  // updateLocation sengaja tidak di-queue (terlalu sering), hanya realtime
+]);
+
+function cacheKey(action, params){
+  // key harus stabil; sessionId tidak ikut biar cache bisa dipakai offline
+  const p = { ...(params||{}) };
+  delete p.sessionId;
+  // normalisasi filter yg sering dipakai
+  if (p.filter && typeof p.filter !== 'string') {
+    try{ p.filter = JSON.stringify(p.filter); }catch{}
+  }
+  return `api_cache:${action}:${JSON.stringify(p)}`;
+}
+
 function normalizeGasUrl(url){
   url = String(url || '').trim();
   if (!url) return url;
@@ -50,6 +92,22 @@ export async function apiCall(action, params = {}, { timeoutMs = 20000 } = {}){
     throw new Error('API.url belum benar. Pastikan URL WebApp mengandung /exec');
   }
 
+  const ck = CACHEABLE.has(action) ? cacheKey(action, params) : '';
+
+  // ✅ kalau offline dan aksi bisa di-cache, kembalikan cache dulu
+  if (!isOnline() && ck){
+    const cached = await kvGet(ck);
+    if (cached && cached.value) return cached.value;
+  }
+
+  // ✅ kalau offline dan aksi bisa di-queue, simpan antrian lalu return sukses (queued)
+  if (!isOnline() && QUEUEABLE.has(action)){
+    const opId = uuid();
+    const toQueue = { ...(params||{}), _opId: opId };
+    await queueAdd({ opId, action, params: toQueue });
+    return { success:true, queued:true, opId, message:'Tersimpan di antrian. Akan dikirim saat online.' };
+  }
+
   const controller = new AbortController();
   const t = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -83,10 +141,59 @@ export async function apiCall(action, params = {}, { timeoutMs = 20000 } = {}){
       err.payload = json;
       throw err;
     }
+
+    // ✅ simpan cache
+    if (ck){
+      try{ await kvSet(ck, json); }catch{}
+    }
     return json;
+  } catch(err){
+    // ✅ fallback cache jika error jaringan
+    if (ck){
+      try{
+        const cached = await kvGet(ck);
+        if (cached && cached.value) return cached.value;
+      }catch{}
+    }
+    // ✅ jika request gagal karena offline, dan queueable -> queue
+    if (!isOnline() && QUEUEABLE.has(action)){
+      const opId = uuid();
+      const toQueue = { ...(params||{}), _opId: opId };
+      try{ await queueAdd({ opId, action, params: toQueue }); }catch{}
+      return { success:true, queued:true, opId, message:'Tersimpan di antrian. Akan dikirim saat online.' };
+    }
+    throw err;
   } finally {
     clearTimeout(t);
   }
+}
+
+// ===== Sync Queue Processor =====
+export async function processOfflineQueue(sessionId, { max = 50 } = {}){
+  if (!isOnline()) return { success:false, message:'Offline', processed:0 };
+  const items = await queueList({});
+  const pending = items.filter(x => x.status === 'pending' || x.status === 'failed').slice(0, max);
+  let processed = 0;
+  for (const it of pending){
+    const id = it.id;
+    const action = it.action;
+    const params = { ...(it.params||{}), sessionId };
+    const now = Date.now();
+    try{
+      await queueUpdate(id, { status:'sending', lastAttemptAt: now, attempts: (it.attempts||0)+1, lastError:'' });
+      const res = await apiCall(action, params, { timeoutMs: 25000 });
+      if (res && res.success !== false){
+        await queueUpdate(id, { status:'synced', result: res, syncedAt: Date.now(), lastError:'' });
+      } else {
+        await queueUpdate(id, { status:'failed', result: res, lastError: (res?.message||'Gagal') });
+      }
+      processed++;
+    } catch(e){
+      await queueUpdate(id, { status:'failed', lastError: String(e?.message||e) });
+      processed++;
+    }
+  }
+  return { success:true, processed };
 }
 
 // ===== wrappers (kompatibel dengan pemanggilan api.login(), api.getConfig(), dst) =====
@@ -159,3 +266,55 @@ export async function adminUpdate(sessionId, dataType, op, data){
 export async function getMapData(sessionId, tripId, includeManifest = 0){
   return apiCall('getMapData', { sessionId, tripId, includeManifest }, { method: 'GET' });
 }
+
+// =============================
+// Offline Queue Sync Processor
+// =============================
+
+export async function getQueueSummary(){
+  const all = await queueList();
+  const sum = { pending:0, failed:0, synced:0, total:0 };
+  all.forEach(x=>{
+    sum.total++;
+    if (x.status === 'pending') sum.pending++;
+    else if (x.status === 'failed') sum.failed++;
+    else if (x.status === 'synced') sum.synced++;
+  });
+  return sum;
+}
+
+export async function processQueue(sessionId, { maxItems = 50 } = {}){
+  if (!isOnline()) return { success:false, message:'Offline', processed:0 };
+  const list = (await queueList({ status:'pending' })) || [];
+  let processed = 0;
+
+  for (const item of list.slice(0, maxItems)){
+    const id = item.id;
+    try{
+      await queueUpdate(id, { attempts:(item.attempts||0)+1, lastAttemptAt:Date.now(), lastError:'' });
+      const p = item.params || {};
+      // pastikan sessionId terbaru
+      p.sessionId = sessionId;
+      const res = await apiCall(item.action, p, { timeoutMs: 25000 });
+      if (res && res.success){
+        await queueUpdate(id, { status:'synced', result:res, syncedAt:Date.now() });
+      } else {
+        await queueUpdate(id, { status:'failed', lastError: res?.message || 'Gagal' });
+      }
+    } catch(e){
+      await queueUpdate(id, { status:'failed', lastError: String(e?.message||e||'Error') });
+    }
+    processed++;
+  }
+  return { success:true, processed };
+}
+
+export async function retryFailed(sessionId, { maxItems = 50 } = {}){
+  // ubah status failed -> pending lalu proses
+  const failed = (await queueList({ status:'failed' })) || [];
+  for (const it of failed.slice(0, maxItems)){
+    await queueUpdate(it.id, { status:'pending', lastError:'' });
+  }
+  return processQueue(sessionId, { maxItems });
+}
+

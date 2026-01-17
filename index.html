@@ -4,8 +4,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Trip Tracker</title>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+    <!-- Offline-friendly local libs -->
+    <link rel="stylesheet" href="libs/all.min.css">
+    <link rel="stylesheet" href="libs/leaflet/leaflet.css">
     <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="style.css">
 </head>
@@ -97,6 +98,10 @@
                 <a href="#" class="menu-item" onclick="showParticipants()">
                     <i class="fas fa-users"></i>
                     <span>Daftar Peserta</span>
+                </a>
+                <a href="#" class="menu-item" onclick="showSync()">
+                    <i class="fas fa-rotate"></i>
+                    <span>Sinkronisasi</span>
                 </a>
                 <div class="menu-divider"></div>
                 <a href="#" class="menu-item" id="adminMenu" style="display:none;" onclick="showAdmin()">
@@ -404,6 +409,53 @@
                 </div>
             </div>
 
+            <!-- Sync Page -->
+            <div id="syncPage" class="content-page" style="display:none;">
+                <h1 class="page-title">Sinkronisasi</h1>
+                <div class="stats-cards" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr));">
+                    <div class="stat-card">
+                        <div class="stat-icon total"><i class="fas fa-list"></i></div>
+                        <div class="stat-info"><h3>Total</h3><p id="syncTotal">0</p></div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon onroad"><i class="fas fa-hourglass-half"></i></div>
+                        <div class="stat-info"><h3>Pending</h3><p id="syncPending">0</p></div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon arrived"><i class="fas fa-check"></i></div>
+                        <div class="stat-info"><h3>Synced</h3><p id="syncSynced">0</p></div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon vehicle"><i class="fas fa-triangle-exclamation"></i></div>
+                        <div class="stat-info"><h3>Failed</h3><p id="syncFailed">0</p></div>
+                    </div>
+                </div>
+
+                <div style="display:flex; flex-wrap:wrap; gap:10px; margin:12px 0 10px;">
+                    <button id="btnSyncNow" class="btn-primary" type="button" style="width:auto;">Kirim Antrian</button>
+                    <button id="btnRetryFailed" class="btn-secondary" type="button" style="width:auto;">Retry Failed</button>
+                    <button id="btnResetOffline" class="btn-secondary" type="button" style="width:auto; border-color:#ffb3b3;">Reset Offline</button>
+                </div>
+
+                <div class="participant-table-container" style="padding:10px;">
+                    <table class="participant-table" style="width:100%;">
+                        <thead>
+                            <tr>
+                                <th style="width:60px;">No</th>
+                                <th style="width:110px;">Status</th>
+                                <th style="width:160px;">Action</th>
+                                <th>OpId</th>
+                                <th style="width:170px;">Dibuat</th>
+                                <th style="width:170px;">Dicoba</th>
+                                <th>Pesan</th>
+                                <th style="width:150px;">Aksi</th>
+                            </tr>
+                        </thead>
+                        <tbody id="syncTableBody"></tbody>
+                    </table>
+                </div>
+            </div>
+
             <!-- Admin Page -->
             <div id="adminPage" class="content-page" style="display:none;">
                 <h1 class="page-title">Admin Panel</h1>
@@ -522,7 +574,7 @@
     <div id="notificationContainer" class="notification-container"></div>
 
     <!-- Scripts -->
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="libs/leaflet/leaflet.js"></script>
     <script src="libs/html5-qrcode.min.js"></script>
     <script type="module" src="js/app.js"></script>
 </body>

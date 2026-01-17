@@ -14,7 +14,8 @@ const CONFIG = {
     HISTORY:'History',
     SESSIONS:'Sessions',
     SETTINGS:'Settings',
-    TRIPS:'Trips'
+    TRIPS:'Trips',
+    OPS:'ClientOps'
   },
   DEFAULT_PASSWORD: 'user123',
   SESSION_DURATION_DAYS: 3,
@@ -79,6 +80,12 @@ function handleRequest(e){
       case 'adminUpdate':
         result = adminUpdate(params);
         break;
+      case 'getScanCandidates':
+        result = getScanCandidates(params);
+        break;
+      case 'assignVehicleStrict':
+        result = assignVehicleStrict(params);
+        break;
       default:
         result = { success:false, message:'Invalid action' };
     }
@@ -101,6 +108,41 @@ function jsonOut(obj){
   return ContentService
     .createTextOutput(JSON.stringify(obj))
     .setMimeType(ContentService.MimeType.JSON);
+}
+
+// ===== Idempotent ops (anti-duplicate cross-user) =====
+function withIdempotent_(params, actionName, userId, fn){
+  var opId = String((params && params._opId) || '').trim();
+  if (!opId) return fn(); // no idempotent key
+
+  var sheet = sh(CONFIG.SHEETS.OPS);
+  var values = sheet.getDataRange().getValues();
+  if (values.length < 2){
+    sheet.appendRow(['OpId','Action','UserId','CreatedAt','ResultJson']);
+    values = sheet.getDataRange().getValues();
+  }
+  var headers = values[0].map(String);
+  var opIdx = headers.indexOf('OpId');
+  var resIdx = headers.indexOf('ResultJson');
+  for (var i=1;i<values.length;i++){
+    if (String(values[i][opIdx]) === opId){
+      var raw = values[i][resIdx];
+      try{
+        var parsed = JSON.parse(String(raw||'{}'));
+        // tandai duplicate agar frontend bisa tahu
+        if (parsed && typeof parsed === 'object') parsed.duplicate = true;
+        return parsed;
+      }catch(e){
+        return { success:true, duplicate:true, message:'Duplicate op (cached)' };
+      }
+    }
+  }
+
+  var result = fn();
+  try{
+    sheet.appendRow([opId, String(actionName||''), String(userId||''), new Date(), JSON.stringify(result)]);
+  }catch(e){}
+  return result;
 }
 
 // ===== Sheets =====
@@ -160,13 +202,14 @@ function ensureInitializedHard_(force){
 
   // Pastikan semua sheet ada + header lengkap
   ensureHeader(sh(CONFIG.SHEETS.USERS), ['NIK','Nama','Region','Estate','Role','PasswordHash']);
-  ensureHeader(sh(CONFIG.SHEETS.VEHICLES), ['Code','Type','Capacity','Driver','Latitude','Longitude','Status','Passengers','Barcode','TripId']);
-  ensureHeader(sh(CONFIG.SHEETS.PARTICIPANTS), ['NIK','Nama','Relationship','Region','Estate','Vehicle','Arrived','ArrivalTime','MainNIK','TripId']);
+  ensureHeader(sh(CONFIG.SHEETS.VEHICLES), ['Code','Type','Capacity','Driver','DriverPhone','Latitude','Longitude','Status','Passengers','Barcode','TripId','LastLocAt','LastLocBy','LastUpdateAt']);
+  ensureHeader(sh(CONFIG.SHEETS.PARTICIPANTS), ['NIK','Nama','Relationship','Region','Estate','Vehicle','Arrived','ArrivalTime','MainNIK','TripId','UpdatedAt']);
   ensureHeader(sh(CONFIG.SHEETS.ARRIVALS), ['NIK','ArrivalTime','ConfirmedBy','TripId']);
   ensureHeader(sh(CONFIG.SHEETS.HISTORY), ['DataType','ArchivedDate','Data']);
   ensureHeader(sh(CONFIG.SHEETS.SESSIONS), ['SessionId','UserId','Created','Expiry','Status']);
   ensureHeader(sh(CONFIG.SHEETS.SETTINGS), ['Key','Value']);
   ensureHeader(sh(CONFIG.SHEETS.TRIPS), ['TripId','Name','Start','End','Origin','Destination','Status']);
+  ensureHeader(sh(CONFIG.SHEETS.OPS), ['OpId','Action','UserId','CreatedAt','ResultJson']);
 
   // Default settings jika belum ada
   const setSheet = sh(CONFIG.SHEETS.SETTINGS);
@@ -316,6 +359,68 @@ function findRowBy(sheet, colName, value){
     if (String(values[r][idx]) === String(value)) return { row:r+1, headers };
   }
   return { row:-1, headers };
+}
+
+function bool_(v){
+  return v===true || String(v).toLowerCase()==='true' || String(v)==='TRUE';
+}
+
+function uniq_(arr){
+  return Array.from(new Set((arr||[]).map(x=>String(x).trim()).filter(Boolean)));
+}
+
+function splitCsv_(s){
+  return String(s||'').split(',').map(x=>x.trim()).filter(Boolean);
+}
+
+function joinCsv_(arr){
+  return (arr||[]).map(x=>String(x).trim()).filter(Boolean).join(',');
+}
+
+// map nik -> vehicleCode berdasarkan sheet Vehicles.Passengers (trip-filter)
+function buildNikToVehicleMap_(tripId){
+  const vehicles = toObjects(sh(CONFIG.SHEETS.VEHICLES))
+    .filter(v=>!tripId || String(v.TripId||'')===String(tripId));
+
+  const map = {};
+  vehicles.forEach(v=>{
+    const code = String(v.Code||'').trim();
+    const ps = splitCsv_(v.Passengers);
+    ps.forEach(nik=>{
+      if (!map[nik]) map[nik] = code;
+    });
+  });
+  return map;
+}
+
+// ambil peserta dedupe per trip
+function getParticipantsDedupe_(tripId){
+  return dedupeParticipants_(toObjects(sh(CONFIG.SHEETS.PARTICIPANTS)), tripId);
+}
+
+// update participant row berdasarkan NIK + TripId (lebih aman dari fungsi lama)
+function updateParticipantRow_(nik, tripId, patch){
+  const sheet = sh(CONFIG.SHEETS.PARTICIPANTS);
+  const values = sheet.getDataRange().getValues();
+  if (values.length < 2) return false;
+
+  const headers = (values[0]||[]).map(String);
+  const nikIdx  = headers.indexOf('NIK');
+  const tripIdx = headers.indexOf('TripId');
+
+  // cari row NIK+Trip
+  for (let i=1;i<values.length;i++){
+    const rowNik = String(values[i][nikIdx]||'').trim();
+    const rowTrip = tripIdx>-1 ? String(values[i][tripIdx]||'').trim() : '';
+    if (rowNik===String(nik).trim() && (!tripId || rowTrip===String(tripId))){
+      Object.keys(patch||{}).forEach(k=>{
+        const c = headers.indexOf(k);
+        if (c>-1) sheet.getRange(i+1, c+1).setValue(patch[k]);
+      });
+      return true;
+    }
+  }
+  return false;
 }
 
 // ===== Config =====
@@ -504,7 +609,20 @@ function getDashboardData(params){
   const totalParticipants = participants.length;
   const totalVehicles = vehicles.length;
   const totalArrived = participants.filter(p=>p.Arrived===true || String(p.Arrived).toLowerCase()==='true').length;
-  const totalOnRoad = vehicles.filter(v=>String(v.Status)==='on_the_way').length;
+    // ✅ totalOnRoad = JUMLAH PESERTA (bukan jumlah kendaraan)
+  const onRoadCodes = new Set(
+    vehicles
+      .filter(v => String(v.Status||'').toLowerCase() === 'on_the_way')
+      .map(v => String(v.Code||'').trim())
+      .filter(Boolean)
+  );
+
+  const totalOnRoad = participants.filter(p=>{
+    const vc = String(p.Vehicle||'').trim();
+    if (!vc || !onRoadCodes.has(vc)) return false;
+    const arrived = (p.Arrived===true || String(p.Arrived).toLowerCase()==='true');
+    return !arrived;
+  }).length;
 
   // Breakdown by Relationship (dynamic)
   // Breakdown by category/relationship (dynamic)
@@ -551,6 +669,7 @@ function getMapData(params){
   const iType = idx('Type');
   const iCap  = idx('Capacity');
   const iDrv  = idx('Driver');
+  const iDrvHp = idx('DriverPhone');
   const iLat  = idx('Latitude');
   const iLng  = idx('Longitude');
   const iSt   = idx('Status');
@@ -573,6 +692,7 @@ function getMapData(params){
       type: (iType>-1 ? row[iType] : ''),
       capacity: (iCap>-1 ? row[iCap] : ''),
       driver: (iDrv>-1 ? row[iDrv] : ''),
+      driverPhone: (iDrvHp>-1 ? row[iDrvHp] : ''),
       currentLocation: { lat: (iLat>-1 ? row[iLat] : ''), lng: (iLng>-1 ? row[iLng] : '') },
       status: (iSt>-1 ? row[iSt] : ''),
       tripId: (iTrip>-1 ? row[iTrip] : ''),
@@ -676,7 +796,6 @@ function updateVehicleLocation(params){
   const vehicleCode = String(params.vehicleCode||'').trim();
   if (!vehicleCode) return { success:false, message:'vehicleCode kosong' };
 
-  // ✅ normalisasi input lat/lng dari apapun (angka / string "0,964" / "9.641.875")
   const lat = parseCoordinate_(params.lat);
   const lng = parseCoordinate_(params.lng);
 
@@ -696,12 +815,40 @@ function updateVehicleLocation(params){
   const lngCol = headers.indexOf('Longitude') + 1;
   const stCol  = headers.indexOf('Status') + 1;
 
-  // ✅ simpan sebagai NUMBER (bukan string)
+  // ✅ lock fields
+  const locAtCol = headers.indexOf('LastLocAt') + 1;
+  const locByCol = headers.indexOf('LastLocBy') + 1;
+  const updAtCol = headers.indexOf('LastUpdateAt') + 1;
+
+  // ====== ✅ SOFT LOCK: hanya 1 tracker aktif per kendaraan ======
+  // Jika ada updater lain dalam 90 detik terakhir → tolak update (biar tidak dobel)
+  try{
+    const lastBy = locByCol>0 ? String(sheet.getRange(found.row, locByCol).getValue()||'').trim() : '';
+    const lastAtRaw = locAtCol>0 ? sheet.getRange(found.row, locAtCol).getValue() : '';
+    const lastAt = lastAtRaw ? new Date(lastAtRaw).getTime() : 0;
+
+    const nowMs = Date.now();
+    const RECENT_MS = 90000; // 90 detik
+
+    if (lastBy && lastBy !== String(userId) && lastAt && (nowMs - lastAt) < RECENT_MS){
+      // ✅ anggap tracker lain masih aktif, skip
+      return { success:true, skipped:true, message:'Skip: tracker lain aktif' };
+    }
+  }catch(e){}
+
+  // ✅ simpan lokasi sebagai NUMBER
   sheet.getRange(found.row, latCol).setValue(lat);
   sheet.getRange(found.row, lngCol).setValue(lng);
 
+  // status on_the_way jika belum arrived
   const currentStatus = sheet.getRange(found.row, stCol).getValue();
   if (String(currentStatus) !== 'arrived') sheet.getRange(found.row, stCol).setValue('on_the_way');
+
+  // ✅ stamp
+  const now = new Date();
+  if (locAtCol>0) sheet.getRange(found.row, locAtCol).setValue(now);
+  if (locByCol>0) sheet.getRange(found.row, locByCol).setValue(String(userId));
+  if (updAtCol>0) sheet.getRange(found.row, updAtCol).setValue(now);
 
   return { success:true, message:'Lokasi diperbarui', lat, lng };
 }
@@ -748,6 +895,8 @@ function assignToVehicle(params){
   const userId = validateSession(params.sessionId);
   if (!userId) return { success:false, message:'Session expired' };
 
+  return withIdempotent_(params, 'assignVehicle', userId, function(){
+
   const vehicleCode = String(params.vehicleCode||'');
   const tripId = String(params.tripId||'').trim();
 
@@ -779,7 +928,8 @@ function assignToVehicle(params){
   // Update participant vehicle assignment
   nikList.forEach(nik=> updateParticipantVehicle(nik, vehicleCode, tripId));
 
-  return { success:true, message:'Berhasil ditambahkan ke kendaraan' };
+    return { success:true, message:'Berhasil ditambahkan ke kendaraan' };
+  });
 }
 
 function updateParticipantVehicle(nik, vehicleCode, tripId){
@@ -803,6 +953,8 @@ function updateParticipantVehicle(nik, vehicleCode, tripId){
 function confirmArrival(params){
   const userId = validateSession(params.sessionId);
   if (!userId) return { success:false, message:'Session expired' };
+
+  return withIdempotent_(params, 'confirmArrival', userId, function(){
 
   const tripId = String(params.tripId||'').trim();
   let nikList = [];
@@ -830,7 +982,8 @@ function confirmArrival(params){
   // Update vehicle status if all passengers arrived
   nikList.forEach(nik=> updateVehicleArrivalStatus(nik, tripId));
 
-  return { success:true, message:'Kedatangan dikonfirmasi' };
+    return { success:true, message:'Kedatangan dikonfirmasi' };
+  });
 }
 
 function markParticipantArrived(nik, now, tripId){
@@ -841,6 +994,7 @@ function markParticipantArrived(nik, now, tripId){
   const nikIdx = headers.indexOf('NIK');
   const arrivedIdx = headers.indexOf('Arrived');
   const timeIdx = headers.indexOf('ArrivalTime');
+  const updIdx = headers.indexOf('UpdatedAt');
   const tripIdx = headers.indexOf('TripId');
 
   for (let i=1;i<values.length;i++){
@@ -848,6 +1002,7 @@ function markParticipantArrived(nik, now, tripId){
       if (arrivedIdx>-1) pSheet.getRange(i+1, arrivedIdx+1).setValue(true);
       if (timeIdx>-1) pSheet.getRange(i+1, timeIdx+1).setValue(now);
       if (tripIdx>-1 && tripId) pSheet.getRange(i+1, tripIdx+1).setValue(tripId);
+      if (updIdx>-1) pSheet.getRange(i+1, updIdx+1).setValue(now);
       return;
     }
   }
@@ -904,6 +1059,8 @@ function getParticipants(params){
 function changePassword(params){
   const userId = validateSession(params.sessionId);
   if (!userId) return { success:false, message:'Session expired' };
+
+  return withIdempotent_(params, 'changePassword', userId, function(){
   const oldPassword = String(params.oldPassword||'');
   const newPassword = String(params.newPassword||'');
   if (!oldPassword || !newPassword) return { success:false, message:'Password tidak lengkap' };
@@ -918,8 +1075,9 @@ function changePassword(params){
   const ok = (oldPassword === CONFIG.DEFAULT_PASSWORD) || verifyPassword(oldPassword, stored);
   if (!ok) return { success:false, message:'Password lama salah' };
 
-  sheet.getRange(found.row, passCol).setValue(hashPassword(newPassword));
-  return { success:true, message:'Password berhasil diubah' };
+    sheet.getRange(found.row, passCol).setValue(hashPassword(newPassword));
+    return { success:true, message:'Password berhasil diubah' };
+  });
 }
 
 // ===== Admin =====
@@ -939,6 +1097,11 @@ function adminGetData(params){
     const vehicles = toObjects(sh(CONFIG.SHEETS.VEHICLES)).filter(v=>!tripId || String(v.TripId||'')===tripId);
     return { success:true, vehicles };
   }
+    if (dataType === 'participants'){
+    const parts = toObjects(sh(CONFIG.SHEETS.PARTICIPANTS))
+      .filter(p=>!tripId || String(p.TripId||'')===tripId);
+    return { success:true, participants: parts };
+  }
   if (dataType === 'history'){
     return { success:true, history: toObjects(sh(CONFIG.SHEETS.HISTORY)) };
   }
@@ -956,28 +1119,32 @@ function adminUpdate(params){
   const userId = validateSession(params.sessionId);
   if (!userId || !isAdmin(userId)) return { success:false, message:'Akses ditolak' };
 
-  const dataType = String(params.dataType||'');
-  // ✅ terima op, tapi tetap dukung action lama kalau masih ada
-  const op = String(params.op || params.action || '');
+  return withIdempotent_(params, 'adminUpdate', userId, function(){
+    const dataType = String(params.dataType||'');
+    // ✅ terima op, tapi tetap dukung action lama kalau masih ada
+    const op = String(params.op || params.action || '');
 
-  let data = params.data;
-  if (typeof data === 'string'){
-    try{ data = JSON.parse(data); }catch{}
-  }
+    let data = params.data;
+    if (typeof data === 'string'){
+      try{ data = JSON.parse(data); }catch{}
+    }
 
-  switch(dataType){
-    case 'user':
-      return updateUser(op, data);
-    case 'vehicle':
-      return updateVehicle(op, data);
-    case 'config':
-      setConfigKV(data || {});
-      return { success:true, message:'Config updated' };
-    case 'trip':
-      return updateTrip(op, data);
-    default:
-      return { success:false, message:'Tipe data tidak valid' };
-  }
+    switch(dataType){
+      case 'user':
+        return updateUser(op, data);
+      case 'vehicle':
+        return updateVehicle(op, data);
+      case 'participant':
+        return updateParticipant(op, data);
+      case 'config':
+        setConfigKV(data || {});
+        return { success:true, message:'Config updated' };
+      case 'trip':
+        return updateTrip(op, data);
+      default:
+        return { success:false, message:'Tipe data tidak valid' };
+    }
+  });
 }
 
 function updateUser(action, userData){
@@ -1021,6 +1188,7 @@ function updateVehicle(action, vehicleData){
       vehicleData.Type || '',
       vehicleData.Capacity || '',
       vehicleData.Driver || '',
+      vehicleData.DriverPhone || '',
       '',
       '',
       vehicleData.Status || 'waiting',
@@ -1040,6 +1208,56 @@ function updateVehicle(action, vehicleData){
     });
     return { success:true, message:'Kendaraan berhasil diperbarui' };
   }
+  return { success:false, message:'Aksi tidak valid' };
+}
+
+function updateParticipant(action, p){
+  const sheet = sh(CONFIG.SHEETS.PARTICIPANTS);
+  if (!p || !p.NIK) return { success:false, message:'NIK wajib' };
+
+  const tripId = String(p.TripId || '').trim();
+  if (!tripId) return { success:false, message:'TripId wajib (gunakan Active Trip ID)' };
+
+  // cari row berdasarkan NIK + TripId (anti duplikat)
+  const values = sheet.getDataRange().getValues();
+  const headers = (values[0]||[]).map(String);
+  const nikIdx = headers.indexOf('NIK');
+  const tripIdx = headers.indexOf('TripId');
+
+  let foundRow = -1;
+  for (let i=1;i<values.length;i++){
+    if (String(values[i][nikIdx])===String(p.NIK) && String(values[i][tripIdx])===tripId){
+      foundRow = i+1;
+      break;
+    }
+  }
+
+  if (action === 'add'){
+    if (foundRow !== -1) return { success:false, message:'Participant NIK+TripId sudah ada' };
+    sheet.appendRow([
+      p.NIK,
+      p.Nama || '',
+      p.Relationship || p.Category || '',
+      p.Region || '',
+      p.Estate || '',
+      p.Vehicle || '',
+      p.Arrived===true || String(p.Arrived).toLowerCase()==='true',
+      p.ArrivalTime || '',
+      p.MainNIK || '',
+      tripId
+    ]);
+    return { success:true, message:'Participant ditambahkan' };
+  }
+
+  if (action === 'update'){
+    if (foundRow === -1) return { success:false, message:'Participant tidak ditemukan (berdasarkan NIK+TripId)' };
+    Object.keys(p).forEach(k=>{
+      const col = headers.indexOf(k);
+      if (col>-1) sheet.getRange(foundRow, col+1).setValue(p[k]);
+    });
+    return { success:true, message:'Participant diperbarui' };
+  }
+
   return { success:false, message:'Aksi tidak valid' };
 }
 
@@ -1079,6 +1297,7 @@ function updateTrip(action, trip){
 // ===== Optional daily cleanup trigger =====
 function autoCleanup(){
   moveOldDataToHistory();
+  moveOldVehicleParticipantToHistory_();
   cleanupOldSessions();
 }
 
@@ -1098,6 +1317,102 @@ function moveOldDataToHistory(){
     if (t < cutoff){
       history.appendRow(['ARRIVAL', new Date(), JSON.stringify(objectFrom(headers, values[i]))]);
       arrivals.deleteRow(i+1);
+    }
+  }
+}
+
+function moveOldVehicleParticipantToHistory_(){
+  const now = new Date();
+  const cutoff = new Date(now.getTime() - (CONFIG.DATA_RETENTION_DAYS*24*60*60*1000));
+
+  const history = sh(CONFIG.SHEETS.HISTORY);
+
+  // ===== Vehicles =====
+  const vSheet = sh(CONFIG.SHEETS.VEHICLES);
+  const vVals = vSheet.getDataRange().getValues();
+  if (vVals.length >= 2){
+    const h = vVals[0].map(String);
+    const iCode = h.indexOf('Code');
+    const iLat  = h.indexOf('Latitude');
+    const iLng  = h.indexOf('Longitude');
+    const iSt   = h.indexOf('Status');
+    const iPass = h.indexOf('Passengers');
+    const iTrip = h.indexOf('TripId');
+    const iLocAt= h.indexOf('LastLocAt');
+    const iLocBy= h.indexOf('LastLocBy');
+    const iUpd  = h.indexOf('LastUpdateAt');
+
+    for (let r=1;r<vVals.length;r++){
+      const row = vVals[r];
+      const t1 = iLocAt>-1 ? row[iLocAt] : '';
+      const t2 = iUpd>-1 ? row[iUpd] : '';
+      const ts = (t1 ? new Date(t1) : (t2 ? new Date(t2) : null));
+
+      if (!ts || !(ts instanceof Date) || isNaN(ts.getTime())) continue;
+      if (ts >= cutoff) continue;
+
+      const snap = {
+        Code: row[iCode],
+        TripId: iTrip>-1 ? row[iTrip] : '',
+        Latitude: iLat>-1 ? row[iLat] : '',
+        Longitude: iLng>-1 ? row[iLng] : '',
+        Status: iSt>-1 ? row[iSt] : '',
+        Passengers: iPass>-1 ? row[iPass] : '',
+        LastLocAt: iLocAt>-1 ? row[iLocAt] : '',
+        LastLocBy: iLocBy>-1 ? row[iLocBy] : '',
+        LastUpdateAt: iUpd>-1 ? row[iUpd] : ''
+      };
+
+      history.appendRow(['VEHICLE', now, JSON.stringify(snap)]);
+
+      // ✅ kosongkan field sensitif 2 hari
+      if (iLat>-1) vSheet.getRange(r+1, iLat+1).setValue('');
+      if (iLng>-1) vSheet.getRange(r+1, iLng+1).setValue('');
+      if (iSt>-1)  vSheet.getRange(r+1, iSt+1).setValue('waiting');
+      if (iPass>-1) vSheet.getRange(r+1, iPass+1).setValue('');
+      if (iLocAt>-1) vSheet.getRange(r+1, iLocAt+1).setValue('');
+      if (iLocBy>-1) vSheet.getRange(r+1, iLocBy+1).setValue('');
+      if (iUpd>-1)   vSheet.getRange(r+1, iUpd+1).setValue('');
+    }
+  }
+
+  // ===== Participants =====
+  const pSheet = sh(CONFIG.SHEETS.PARTICIPANTS);
+  const pVals = pSheet.getDataRange().getValues();
+  if (pVals.length >= 2){
+    const h = pVals[0].map(String);
+    const iNik = h.indexOf('NIK');
+    const iTrip = h.indexOf('TripId');
+    const iVeh = h.indexOf('Vehicle');
+    const iArr = h.indexOf('Arrived');
+    const iAt  = h.indexOf('ArrivalTime');
+    const iUpd = h.indexOf('UpdatedAt');
+
+    for (let r=1;r<pVals.length;r++){
+      const row = pVals[r];
+      const t0 = iUpd>-1 ? row[iUpd] : '';
+      const t1 = iAt>-1 ? row[iAt] : '';
+      const ts = (t0 ? new Date(t0) : (t1 ? new Date(t1) : null));
+
+      if (!ts || !(ts instanceof Date) || isNaN(ts.getTime())) continue;
+      if (ts >= cutoff) continue;
+
+      const snap = {
+        NIK: row[iNik],
+        TripId: iTrip>-1 ? row[iTrip] : '',
+        Vehicle: iVeh>-1 ? row[iVeh] : '',
+        Arrived: iArr>-1 ? row[iArr] : '',
+        ArrivalTime: iAt>-1 ? row[iAt] : '',
+        UpdatedAt: iUpd>-1 ? row[iUpd] : ''
+      };
+
+      history.appendRow(['PARTICIPANT', now, JSON.stringify(snap)]);
+
+      // ✅ kosongkan field sensitif 2 hari
+      if (iVeh>-1) pSheet.getRange(r+1, iVeh+1).setValue('');
+      if (iArr>-1) pSheet.getRange(r+1, iArr+1).setValue(false);
+      if (iAt>-1)  pSheet.getRange(r+1, iAt+1).setValue('');
+      if (iUpd>-1) pSheet.getRange(r+1, iUpd+1).setValue('');
     }
   }
 }
@@ -1172,5 +1487,197 @@ function SETUP_RESET(){
   PropertiesService.getScriptProperties().deleteProperty('TT_INIT');
   Logger.log('TT_INIT reset');
   return { success:true, message:'TT_INIT reset' };
+}
+
+function getScanCandidates(params){
+  const userId = validateSession(params.sessionId);
+  if (!userId) return { success:false, message:'Session expired' };
+
+  const tripId = String(params.tripId||'').trim();
+  const q = String(params.q||'').trim().toLowerCase(); // optional search
+  const limit = Math.min(Math.max(Number(params.limit||60), 10), 200);
+
+  const parts = getParticipantsDedupe_(tripId);
+
+  // mapping nik -> vehicle existing
+  const nikToVeh = buildNikToVehicleMap_(tripId);
+
+  // 1) afiliasi utama (MainNIK=userId) + dirinya sendiri (kalau ada di participants)
+  let aff = parts.filter(p=> String(p.MainNIK||'').trim()===String(userId));
+  const self = parts.find(p=> String(p.NIK||'').trim()===String(userId));
+  if (self && !aff.some(x=>String(x.NIK).trim()===String(userId))) aff.unshift(self);
+
+  // 2) optional search peserta lain (bisa untuk “ambil peserta lain”)
+  let other = [];
+  if (q){
+    other = parts.filter(p=>{
+      const nik = String(p.NIK||'').toLowerCase();
+      const nama = String(p.Nama||'').toLowerCase();
+      const rel = String(p.Relationship||'').toLowerCase();
+      return nik.includes(q) || nama.includes(q) || rel.includes(q);
+    }).slice(0, limit);
+  }
+
+  // format response (ringkas + status)
+  const pack = (p)=> {
+    const nik = String(p.NIK||'').trim();
+    return {
+      nik,
+      nama: p.Nama || '',
+      relationship: p.Relationship || '',
+      region: p.Region || '',
+      estate: p.Estate || '',
+      arrived: bool_(p.Arrived),
+      vehicle: p.Vehicle || '',
+      mainNik: p.MainNIK || '',
+      // kendaraan dari Vehicles.Passengers (sumber kebenaran “siapa penumpang di kendaraan mana”)
+      inVehicle: nikToVeh[nik] || ''
+    };
+  };
+
+  return {
+    success:true,
+    coordinatorNik: userId,
+    affiliated: aff.map(pack),
+    search: other.map(pack)
+  };
+}
+
+function assignVehicleStrict(params){
+  const userId = validateSession(params.sessionId);
+  if (!userId) return { success:false, message:'Session expired' };
+
+  return withIdempotent_(params, 'assignVehicleStrict', userId, function(){
+
+  const vehicleCode = String(params.vehicleCode||'').trim();
+  const tripId = String(params.tripId||'').trim();
+  if (!vehicleCode) return { success:false, message:'vehicleCode kosong' };
+  if (!tripId) return { success:false, message:'tripId kosong' };
+
+  // nikList wajib
+  let nikList = [];
+  try{ nikList = JSON.parse(params.nikList||'[]'); }
+  catch{ nikList = String(params.nikList||'').split(','); }
+  nikList = uniq_(nikList);
+  if (!nikList.length) return { success:false, message:'NIK list kosong' };
+
+  const setMainNik = String(params.setMainNik||'').trim(); // optional (untuk ambil peserta lain)
+  const moveIfInOther = (String(params.moveIfInOtherVehicle||'1') === '1');
+
+  // valid vehicle
+  const vSheet = sh(CONFIG.SHEETS.VEHICLES);
+  const vFound = findRowBy(vSheet,'Code',vehicleCode);
+  if (vFound.row === -1) return { success:false, message:'Kendaraan tidak ditemukan' };
+
+  const vHeaders = vFound.headers.map(String);
+  const passCol = vHeaders.indexOf('Passengers')+1;
+  const capCol  = vHeaders.indexOf('Capacity')+1;
+  const tripCol = vHeaders.indexOf('TripId')+1;
+
+  // pastikan trip id kendaraan terset
+  if (tripCol>0) vSheet.getRange(vFound.row, tripCol).setValue(tripId);
+
+  const capacity = Number(vSheet.getRange(vFound.row, capCol).getValue() || 0);
+
+  // mapping nik->veh existing
+  const nikToVeh = buildNikToVehicleMap_(tripId);
+
+  // 1) remove nik dari kendaraan lain jika perlu
+  const moved = [];
+  const blocked = [];
+
+  if (moveIfInOther){
+    const vehicles = toObjects(vSheet).filter(v=>!tripId || String(v.TripId||'')===tripId);
+    // index code->rowNumber untuk update cepat
+    const allValues = vSheet.getDataRange().getValues();
+    const hdr = allValues[0].map(String);
+    const codeIdx = hdr.indexOf('Code');
+    const passIdx = hdr.indexOf('Passengers');
+    const tripIdx = hdr.indexOf('TripId');
+
+    const codeToRow = {};
+    for (let i=1;i<allValues.length;i++){
+      const code = String(allValues[i][codeIdx]||'').trim();
+      const rowTrip = tripIdx>-1 ? String(allValues[i][tripIdx]||'').trim() : '';
+      if (!code) continue;
+      if (tripId && rowTrip !== tripId) continue;
+      codeToRow[code] = i+1;
+    }
+
+    nikList.forEach(nik=>{
+      const inVeh = nikToVeh[nik];
+      if (inVeh && inVeh !== vehicleCode){
+        // pindahkan: hapus dari kendaraan lama
+        const oldRow = codeToRow[inVeh];
+        if (oldRow){
+          const oldPassengers = splitCsv_(vSheet.getRange(oldRow, passIdx+1).getValue());
+          const kept = oldPassengers.filter(x=>x!==nik);
+          vSheet.getRange(oldRow, passIdx+1).setValue(joinCsv_(kept));
+          moved.push({ nik, from: inVeh, to: vehicleCode });
+        }
+      }
+    });
+  } else {
+    nikList.forEach(nik=>{
+      const inVeh = nikToVeh[nik];
+      if (inVeh && inVeh !== vehicleCode){
+        blocked.push({ nik, inVehicle: inVeh });
+      }
+    });
+    if (blocked.length){
+      return { success:false, message:'Ada peserta sudah terdaftar di kendaraan lain', blocked };
+    }
+  }
+
+  // 2) add ke kendaraan target (anti-double)
+  const currentPassengers = splitCsv_(vSheet.getRange(vFound.row, passCol).getValue());
+  const currentSet = new Set(currentPassengers);
+
+  const added = [];
+  nikList.forEach(nik=>{
+    if (!currentSet.has(nik)){
+      currentPassengers.push(nik);
+      currentSet.add(nik);
+      added.push(nik);
+    }
+  });
+
+  // cek kapasitas
+  if (capacity && currentPassengers.length > capacity){
+    return {
+      success:false,
+      message:`Kapasitas penuh (kapasitas ${capacity}, akan terisi ${currentPassengers.length}). Kurangi centang dulu.`,
+      added,
+      moved
+    };
+  }
+
+  vSheet.getRange(vFound.row, passCol).setValue(joinCsv_(currentPassengers));
+
+    // ✅ stamp kendaraan (Passengers berubah)
+  const vHeaders2 = vFound.headers.map(String);
+  const updAtCol = vHeaders2.indexOf('LastUpdateAt') + 1;
+  if (updAtCol>0) vSheet.getRange(vFound.row, updAtCol).setValue(new Date());
+
+  // 3) update Participants.Vehicle + optional update MainNIK
+  const updated = [];
+  nikList.forEach(nik=>{
+    const patch = { Vehicle: vehicleCode, TripId: tripId, UpdatedAt: new Date() };
+    if (setMainNik) patch.MainNIK = setMainNik;
+    const ok = updateParticipantRow_(nik, tripId, patch);
+    if (ok) updated.push(nik);
+  });
+
+    return {
+      success:true,
+      message:'Penempatan kendaraan berhasil',
+      vehicleCode,
+      tripId,
+      added,
+      moved,
+      updated,
+      totalPassengers: currentPassengers.length
+    };
+  });
 }
 

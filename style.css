@@ -1227,6 +1227,20 @@ body.sidebar-open{
 }
 .badge.success{ background:#d4edda; color:#155724; }
 .badge.warning{ background:#fff3cd; color:#856404; }
+.badge.danger{ background:#f8d7da; color:#721c24; }
+
+/* ===== Sync Page mini buttons ===== */
+.btn-mini{
+  padding:6px 10px;
+  border:1px solid #d0d7de;
+  background:#fff;
+  border-radius:10px;
+  font-weight:800;
+  cursor:pointer;
+  font-size:12px;
+}
+.btn-mini:hover{ background:#f6f8fa; }
+.btn-mini.danger{ border-color:#ffb3b3; }
 
 /* ===== Leaflet DIV ICON Vehicle Marker ===== */
 .vmk{

@@ -7,9 +7,12 @@ import { initMap, refreshMap, stopTrackingPublic, startBackgroundTrackingPublic 
 import { startScanning, manualSubmit, confirmAssignment, getPendingVehicle } from './pages/scan.js';
 import { renderFamily, confirmArrival as doConfirmArrival, initArrivalPage  } from './pages/arrival.js';
 import { loadParticipants, searchAndRender } from './pages/participants.js';
+import { renderSyncPage } from './pages/sync.js';
 import { initAdminEnhancements, showTab, loadUsers, loadVehicles, loadParticipantsAdmin, loadConfigAndTrips, saveConfig, upsertTrip, upsertUser, upsertVehicle, upsertParticipant } from './pages/admin.js';
 
 const State = {  session: null,  user: null,  cfg: null,  mapTimer: null};
+
+let syncTimer = null;
 
 function stopTrackingIfAny(){
   try{ stopTrackingPublic(); }catch{}
@@ -26,6 +29,13 @@ window.hideVehicleDetails = ()=> window.__hideVehicleDetailsUI?.();
 
 // Boot
 document.addEventListener('DOMContentLoaded', async ()=>{
+  // ✅ offline shell
+  try{
+    if ('serviceWorker' in navigator){
+      navigator.serviceWorker.register('./sw.js').catch(()=>{});
+    }
+  }catch{}
+
   ensureSidebarOverlay();
   hideLoadingSoon();
   bindLoginEnter();
@@ -113,7 +123,39 @@ async function afterLoginInit(){
   renderFamily(State.user);
   $('#userName').textContent = (State.user.name || State.user.Nama || '').toUpperCase();
   $('#currentUserInfo').textContent = `${State.user.name || State.user.Nama} - ${State.user.nik || State.user.NIK}`;
+
+  // ✅ warm cache (download master & data aktual sekali, lalu dipakai offline)
+  try{
+    const sid = State.session.sessionId;
+    const tripId = State.session.activeTripId || '';
+    Promise.allSettled([
+      api.getVehicles(sid, tripId, ''),
+      api.getParticipants(sid, tripId, 'all'),
+      api.getParticipants(sid, tripId, 'arrived'),
+      api.getMapData(sid, tripId, 0)
+    ]).catch(()=>{});
+  }catch{}
+
+  // ✅ background sync queue saat online
+  try{
+    if (syncTimer) clearInterval(syncTimer);
+    const tick = async ()=>{
+      if (!State.session) return;
+      try{ await api.processQueue(State.session.sessionId, { maxItems: 20 }); }catch{}
+    };
+    window.addEventListener('online', tick);
+    syncTimer = setInterval(tick, 30000);
+    tick();
+  }catch{}
 }
+
+// ===== Page Navigation =====
+window.showSync = async (menuEl)=>{
+  activateMenu(menuEl || (document.querySelectorAll('.menu-item')[5]||null));
+  showPage('syncPage');
+  closeSidebarOnMobile();
+  if (State.session) await renderSyncPage(State.session);
+};
 
 function showMainApp(){
   $('#loginPage').style.display = 'none';
@@ -313,7 +355,8 @@ window.showMap = async ()=>{
     // simpan untuk fallback
     localStorage.setItem('tt_last_vehicle_code', code);
     // ✅ start tracking otomatis
-    startTrackingAutoPublic(State.session, code);
+    // start tracking otomatis (background)
+    startBackgroundTrackingPublic(State.session, code);
   } else {
     showNotification('Belum ada kendaraan terpilih. Scan kendaraan dulu di menu "Scan Kendaraan".', 'info');
   }

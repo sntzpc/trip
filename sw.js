@@ -1,12 +1,16 @@
 /* Trip Tracker Service Worker (offline shell) */
 
-const CACHE_NAME = 'trip_tracker_shell_v1';
+const CACHE_NAME = 'trip_tracker_shell_v2';
 const ASSETS = [
   './',
   './index.html',
   './style.css',
   './assets/kmp.png',
-  './libs/all.min.css',
+  './css/all.min.css',
+  './webfonts/fa-brands-400.woff2',
+  './webfonts/fa-regular-400.woff2',
+  './webfonts/fa-solid-900.ttf',
+  './webfonts/fa-solid-900.woff2',
   './libs/html5-qrcode.min.js',
   './libs/leaflet/leaflet.css',
   './libs/leaflet/leaflet.js',

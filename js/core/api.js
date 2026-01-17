@@ -23,6 +23,7 @@ const CACHEABLE = new Set([
   'getMapData',
   'getVehicles',
   'getParticipants',
+  'getScanCandidates',
   'adminGetData'
 ]);
 
@@ -44,6 +45,50 @@ function cacheKey(action, params){
     try{ p.filter = JSON.stringify(p.filter); }catch{}
   }
   return `api_cache:${action}:${JSON.stringify(p)}`;
+}
+
+// ===== helpers untuk offline-derivation =====
+async function getCachedJson(action, params){
+  try{
+    const ck = cacheKey(action, params);
+    const rec = await kvGet(ck);
+    return rec?.value || null;
+  }catch{ return null; }
+}
+
+async function getCachedParticipantsAll(tripId){
+  const v = await getCachedJson('getParticipants', { tripId, filter:'all' });
+  return (v && v.participants) ? v.participants : [];
+}
+
+async function getCachedVehicles(tripId){
+  // untuk user biasa, gunakan cache getVehicles (tidak butuh admin)
+  const v1 = await getCachedJson('getVehicles', { tripId, q: '' });
+  if (v1 && Array.isArray(v1.vehicles)) return v1.vehicles;
+
+  // fallback: adminGetData(vehicles)
+  const v2 = await getCachedJson('adminGetData', { dataType:'vehicles', tripId });
+  return (v2 && Array.isArray(v2.vehicles)) ? v2.vehicles : [];
+}
+
+function boolish(x){
+  if (x === true) return true;
+  const s = String(x||'').toLowerCase();
+  return s === 'true' || s === '1' || s === 'yes' || s === 'y';
+}
+
+function buildNikToVehicleFromVehicles(vehicles){
+  const map = {};
+  (vehicles||[]).forEach(v=>{
+    const code = String(v.Code || v.code || '').trim();
+    if (!code) return;
+    const csv = String(v.Passengers || v.passengers || '').trim();
+    if (!csv) return;
+    csv.split(',').map(x=>x.trim()).filter(Boolean).forEach(nik=>{
+      map[String(nik)] = code;
+    });
+  });
+  return map;
 }
 
 function normalizeGasUrl(url){
@@ -93,6 +138,83 @@ export async function apiCall(action, params = {}, { timeoutMs = 20000 } = {}){
   }
 
   const ck = CACHEABLE.has(action) ? cacheKey(action, params) : '';
+
+  // =====================================================
+  // OFFLINE SMART FALLBACKS (tanpa harus memanggil server)
+  // =====================================================
+  // getScanCandidates harus tetap bisa jalan offline (scan + input manual)
+  if (!isOnline() && action === 'getScanCandidates'){
+    const tripId = String(params.tripId || '').trim();
+    const q = String(params.q || '').trim().toLowerCase();
+    const limit = Math.min(Math.max(Number(params.limit||80), 10), 200);
+
+    const sessionId = params.sessionId; // dipakai hanya untuk cari coordinatorNik (nik login)
+    // NOTE: userId (nik) tidak kita simpan di cacheKey, jadi ambil dari params jika ada
+    const coordinatorNik = String(params.coordinatorNik || params.nik || '').trim() || '';
+
+    const parts = await getCachedParticipantsAll(tripId);
+    const vehicles = await getCachedVehicles(tripId);
+    const nikToVeh = buildNikToVehicleFromVehicles(vehicles);
+
+    // affiliated: MainNIK == coordinatorNik (atau fallback: kosong jika tidak ada)
+    const aff = coordinatorNik
+      ? parts.filter(p=> String(p.MainNIK||p.mainNik||'').trim()===coordinatorNik)
+      : [];
+
+    // include self jika ada
+    if (coordinatorNik){
+      const self = parts.find(p=> String(p.NIK||p.nik||'').trim()===coordinatorNik);
+      if (self && !aff.some(x=>String(x.NIK||x.nik||'').trim()===coordinatorNik)) aff.unshift(self);
+    }
+
+    let other = [];
+    if (q){
+      other = parts.filter(p=>{
+        const nik = String(p.NIK||p.nik||'').toLowerCase();
+        const nama = String(p.Nama||p.nama||'').toLowerCase();
+        const rel = String(p.Relationship||p.relationship||'').toLowerCase();
+        return nik.includes(q) || nama.includes(q) || rel.includes(q);
+      }).slice(0, limit);
+    }
+
+    const pack = (p)=>{
+      const nik = String(p.NIK||p.nik||'').trim();
+      return {
+        nik,
+        nama: p.Nama || p.nama || '',
+        relationship: p.Relationship || p.relationship || '',
+        region: p.Region || p.region || '',
+        estate: p.Estate || p.estate || '',
+        arrived: boolish(p.Arrived ?? p.arrived),
+        vehicle: p.Vehicle || p.vehicle || '',
+        mainNik: p.MainNIK || p.mainNik || '',
+        inVehicle: nikToVeh[nik] || ''
+      };
+    };
+
+    return {
+      success: true,
+      offline: true,
+      coordinatorNik: coordinatorNik,
+      affiliated: (aff||[]).map(pack),
+      search: (other||[]).map(pack)
+    };
+  }
+
+  // getVehicles(q) harus bisa offline: cari dari cache getVehicles(q:'')
+  if (!isOnline() && action === 'getVehicles'){
+    const tripId = String(params.tripId || '').trim();
+    const q = String(params.q || '').trim();
+    if (q){
+      const v1 = await getCachedJson('getVehicles', { tripId, q: '' });
+      const list = (v1 && Array.isArray(v1.vehicles)) ? v1.vehicles : [];
+      const found = list.find(v=> String(v.Code||v.code||'')===q || String(v.Barcode||v.barcode||'')===q);
+      if (found){
+        return { success:true, offline:true, vehicle: found };
+      }
+    }
+    // kalau q kosong, biarkan mekanisme cacheKey berjalan (akan return cached list)
+  }
 
   // ✅ kalau offline dan aksi bisa di-cache, kembalikan cache dulu
   if (!isOnline() && ck){

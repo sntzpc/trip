@@ -124,29 +124,166 @@ async function afterLoginInit(){
   $('#userName').textContent = (State.user.name || State.user.Nama || '').toUpperCase();
   $('#currentUserInfo').textContent = `${State.user.name || State.user.Nama} - ${State.user.nik || State.user.NIK}`;
 
-  // ✅ warm cache (download master & data aktual sekali, lalu dipakai offline)
-  try{
-    const sid = State.session.sessionId;
-    const tripId = State.session.activeTripId || '';
-    Promise.allSettled([
-      api.getVehicles(sid, tripId, ''),
-      api.getParticipants(sid, tripId, 'all'),
-      api.getParticipants(sid, tripId, 'arrived'),
-      api.getMapData(sid, tripId, 0)
-    ]).catch(()=>{});
-  }catch{}
+  // ✅ warm cache (download master + data aktual agar 100% bisa dipakai offline)
+  //    Catatan: saat offline, apiCall akan membaca cache IndexedDB (kv) otomatis.
+  try{ warmupOfflineData(State.session, State.user); }catch{}
 
-  // ✅ background sync queue saat online
+  // ✅ background sync queue saat online + prompt auto-sync (5 detik)
   try{
     if (syncTimer) clearInterval(syncTimer);
-    const tick = async ()=>{
+
+    const tick = async ({ prompt = false } = {})=>{
       if (!State.session) return;
-      try{ await api.processQueue(State.session.sessionId, { maxItems: 20 }); }catch{}
+      // hanya proses otomatis jika user tidak sedang offline
+      if (navigator.onLine === false) return;
+
+      // cek antrian dulu
+      const sum = await api.getQueueSummary().catch(()=>null);
+      if (!sum) return;
+
+      if (prompt && (sum.pending + sum.failed) > 0){
+        showAutoSyncPrompt(State.session, sum);
+        return;
+      }
+
+      // silent background sync (tanpa notifikasi)
+      if (sum.pending > 0){
+        try{ await api.processQueue(State.session.sessionId, { maxItems: 20 }); }catch{}
+      }
     };
-    window.addEventListener('online', tick);
-    syncTimer = setInterval(tick, 30000);
-    tick();
+
+    window.addEventListener('online', ()=> tick({ prompt: true }));
+    syncTimer = setInterval(()=> tick({ prompt:false }), 30000);
+    // saat login pertama kali, kalau sudah ada antrian dan sedang online -> tampilkan prompt
+    tick({ prompt: true });
   }catch{}
+}
+
+// ============================
+// Offline Warmup (download data)
+// ============================
+let _warmupOnce = false;
+async function warmupOfflineData(session, user){
+  if (!session) return;
+  // jalankan sekali per load (biar tidak spam)
+  if (_warmupOnce) return;
+  _warmupOnce = true;
+
+  const sid = session.sessionId;
+  const tripId = session.activeTripId || '';
+  const coordinatorNik = session.userId || user?.nik || user?.NIK || '';
+
+  const jobs = [
+    // data aktual
+    api.getDashboard(sid, tripId),
+    api.getMapData(sid, tripId, 1),
+    // master trip aktif
+    api.getVehicles(sid, tripId, ''),
+    api.getParticipants(sid, tripId, 'all'),
+    api.getParticipants(sid, tripId, 'arrived'),
+    api.getParticipants(sid, tripId, 'not_arrived'),
+    // kebutuhan scan offline
+    api.apiCall('getScanCandidates', { sessionId: sid, coordinatorNik, tripId, q:'', limit: 200 })
+  ];
+
+  // master admin (kalau role admin)
+  if ((session.role||'') === 'admin'){
+    jobs.push(
+      api.adminGet(sid, 'config'),
+      api.adminGet(sid, 'trips'),
+      api.adminGet(sid, 'users'),
+      api.adminGet(sid, 'vehicles', tripId),
+      api.adminGet(sid, 'participants', tripId)
+    );
+  }
+
+  Promise.allSettled(jobs).catch(()=>{});
+}
+
+// ============================
+// Auto-sync prompt (5 detik)
+// ============================
+let _autoSyncShownAt = 0;
+let _autoSyncEl = null;
+let _autoSyncTimer = null;
+
+function showAutoSyncPrompt(session, sum){
+  const now = Date.now();
+  // cegah spam notif
+  if (now - _autoSyncShownAt < 15000) return;
+  _autoSyncShownAt = now;
+
+  // kalau sudah ada notif sebelumnya, hapus
+  try{ _autoSyncEl?.remove(); }catch{}
+  _autoSyncEl = null;
+  if (_autoSyncTimer) clearTimeout(_autoSyncTimer);
+  _autoSyncTimer = null;
+
+  const container = document.getElementById('notificationContainer');
+  if (!container) return;
+
+  const pending = sum.pending || 0;
+  const failed = sum.failed || 0;
+  const total = pending + failed;
+
+  const n = document.createElement('div');
+  n.className = 'notification info';
+  n.innerHTML = `
+    <div class="notification-content" style="align-items:flex-start;">
+      <div class="notification-icon"><i class="fas fa-sync"></i></div>
+      <div class="notification-message" style="line-height:1.35;">
+        <b>Ada ${total} data</b> menunggu sinkronisasi (${pending} pending, ${failed} gagal).<br>
+        Sinkronisasi otomatis akan berjalan dalam <b><span id="ttSyncCountdown">5</span> detik</b>.
+        <div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">
+          <button id="ttSyncNowBtn" class="btn btn-secondary" type="button" style="padding:8px 10px;">Sync Sekarang</button>
+          <button id="ttSyncLaterBtn" class="btn btn-secondary" type="button" style="padding:8px 10px;">Nanti</button>
+        </div>
+      </div>
+    </div>
+    <div class="notification-close" title="Tutup"><i class="fas fa-times"></i></div>
+  `;
+  container.appendChild(n);
+  _autoSyncEl = n;
+
+  const closeAll = ()=>{
+    try{ n.remove(); }catch{}
+    if (_autoSyncTimer) clearTimeout(_autoSyncTimer);
+    _autoSyncTimer = null;
+  };
+  n.querySelector('.notification-close')?.addEventListener('click', closeAll);
+  n.querySelector('#ttSyncLaterBtn')?.addEventListener('click', closeAll);
+
+  // countdown UI
+  let s = 5;
+  const cdEl = n.querySelector('#ttSyncCountdown');
+  const cdInt = setInterval(()=>{
+    s -= 1;
+    if (cdEl) cdEl.textContent = String(Math.max(s, 0));
+    if (s <= 0) clearInterval(cdInt);
+  }, 1000);
+
+  n.querySelector('#ttSyncNowBtn')?.addEventListener('click', async ()=>{
+    try{
+      closeAll();
+      await api.processQueue(session.sessionId, { maxItems: 50 });
+      showNotification('Sinkronisasi selesai diproses.', 'success');
+    }catch(e){
+      showNotification(e?.message || 'Gagal sinkronisasi', 'error');
+    }
+  });
+
+  // auto-run setelah 5 detik jika tidak ditutup
+  _autoSyncTimer = setTimeout(async ()=>{
+    try{
+      closeAll();
+      await api.processQueue(session.sessionId, { maxItems: 50 });
+      showNotification('Sinkronisasi otomatis dijalankan.', 'success');
+    }catch(e){
+      showNotification(e?.message || 'Gagal sinkronisasi', 'error');
+    }
+  }, 5000);
+
+  setTimeout(()=>{ try{ n.classList.add('show'); }catch{} }, 10);
 }
 
 // ===== Page Navigation =====

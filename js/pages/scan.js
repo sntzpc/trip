@@ -139,6 +139,7 @@ async function loadCandidates(session){
   const tripId = session.activeTripId || '';
   const res = await api.apiCall('getScanCandidates', {
     sessionId: session.sessionId,
+    coordinatorNik: session.userId || session.user?.nik || session.user?.NIK || '',
     tripId,
     q: '',
     limit: 80
@@ -159,6 +160,7 @@ async function searchCandidates(session, q){
   const tripId = session.activeTripId || '';
   const res = await api.apiCall('getScanCandidates', {
     sessionId: session.sessionId,
+    coordinatorNik: session.userId || session.user?.nik || session.user?.NIK || '',
     tripId,
     q: q || '',
     limit: 80

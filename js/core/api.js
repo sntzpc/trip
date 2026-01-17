@@ -6,6 +6,9 @@ export const API = {
 
 import { kvGet, kvSet, queueAdd, queueList, queueUpdate } from './idb.js';
 
+// =====================
+// Utils
+// =====================
 function isOnline(){
   try{ return navigator.onLine !== false; }catch{ return true; }
 }
@@ -15,6 +18,43 @@ function uuid(){
   return 'op_' + Date.now() + '_' + Math.random().toString(16).slice(2);
 }
 
+function boolish(x){
+  if (x === true) return true;
+  const s = String(x||'').toLowerCase();
+  return s === 'true' || s === '1' || s === 'yes' || s === 'y';
+}
+
+// ===== Normalizers =====
+function normStr(x){
+  return String(x ?? '').trim();
+}
+function normKey(x){
+  return normStr(x).toLowerCase();
+}
+
+// ===== Field getters (tahan variasi GAS) =====
+function getNik(p){
+  return normStr(p?.NIK ?? p?.nik ?? p?.Nik ?? p?.id ?? '');
+}
+function getNama(p){
+  return normStr(p?.Nama ?? p?.nama ?? p?.Name ?? p?.name ?? '');
+}
+function getRel(p){
+  return normStr(p?.Relationship ?? p?.relationship ?? p?.Rel ?? p?.rel ?? '');
+}
+function getMainNik(p){
+  return normStr(p?.MainNIK ?? p?.mainNik ?? p?.MainNik ?? p?.main_nik ?? p?.mainNik ?? '');
+}
+function getVehicleField(p){
+  return normStr(p?.Vehicle ?? p?.vehicle ?? p?.InVehicle ?? p?.inVehicle ?? '');
+}
+function getArrivedField(p){
+  return boolish(p?.Arrived ?? p?.arrived ?? p?.isArrived ?? p?.IsArrived ?? false);
+}
+
+// =====================
+// Cache/Queue configuration
+// =====================
 const CACHEABLE = new Set([
   'getConfig',
   'getUserData',
@@ -40,6 +80,7 @@ function cacheKey(action, params){
   // key harus stabil; sessionId tidak ikut biar cache bisa dipakai offline
   const p = { ...(params||{}) };
   delete p.sessionId;
+
   // normalisasi filter yg sering dipakai
   if (p.filter && typeof p.filter !== 'string') {
     try{ p.filter = JSON.stringify(p.filter); }catch{}
@@ -47,7 +88,9 @@ function cacheKey(action, params){
   return `api_cache:${action}:${JSON.stringify(p)}`;
 }
 
-// ===== helpers untuk offline-derivation =====
+// =====================
+// Helpers untuk offline-derivation
+// =====================
 async function getCachedJson(action, params){
   try{
     const ck = cacheKey(action, params);
@@ -58,7 +101,7 @@ async function getCachedJson(action, params){
 
 async function getCachedParticipantsAll(tripId){
   const v = await getCachedJson('getParticipants', { tripId, filter:'all' });
-  return (v && v.participants) ? v.participants : [];
+  return (v && Array.isArray(v.participants)) ? v.participants : [];
 }
 
 async function getCachedVehicles(tripId){
@@ -71,56 +114,47 @@ async function getCachedVehicles(tripId){
   return (v2 && Array.isArray(v2.vehicles)) ? v2.vehicles : [];
 }
 
-function boolish(x){
-  if (x === true) return true;
-  const s = String(x||'').toLowerCase();
-  return s === 'true' || s === '1' || s === 'yes' || s === 'y';
-}
-
 function buildNikToVehicleFromVehicles(vehicles){
   const map = {};
   (vehicles||[]).forEach(v=>{
-    const code = String(v.Code || v.code || '').trim();
+    const code = normStr(v.Code || v.code || '');
     if (!code) return;
-    const csv = String(v.Passengers || v.passengers || '').trim();
+
+    const csv = normStr(v.Passengers || v.passengers || '');
     if (!csv) return;
-    csv.split(',').map(x=>x.trim()).filter(Boolean).forEach(nik=>{
-      map[String(nik)] = code;
-    });
+
+    csv.split(',')
+      .map(x=>normStr(x))
+      .filter(Boolean)
+      .forEach(nik => { map[String(nik)] = code; });
   });
   return map;
 }
 
+// (fungsi ini belum dipakai, biarkan tetap kalau Anda butuh nanti)
 function normalizeGasUrl(url){
   url = String(url || '').trim();
   if (!url) return url;
 
-  // jangan pakai echo/lib untuk API
   if (url.includes('/macros/echo') || url.includes('&lib=')) {
     throw new Error('URL salah: jangan pakai /macros/echo atau &lib= untuk API WebApp.');
   }
-
-  // ✅ kalau user sudah pakai googleusercontent + user_content_key, biarkan
   if (url.includes('script.googleusercontent.com') && url.includes('user_content_key=')) {
     return url;
   }
-
-  // ✅ kalau user pakai script.google.com/exec, BIARKAN (jangan replace otomatis)
   if (url.includes('script.google.com') && url.includes('/exec')) {
     return url;
   }
-
-  // kalau user pakai googleusercontent tapi belum ada user_content_key, ini rawan 307
   if (url.includes('script.googleusercontent.com') && url.includes('/exec')) {
     throw new Error(
       'URL googleusercontent Anda masih versi pendek dan memicu 307. ' +
       'Ambil URL final (yang ada user_content_key=...) dengan cara buka URL /exec di browser lalu copy URL setelah redirect.'
     );
   }
-
   return url;
 }
 
+// (fungsi ini juga belum dipakai, tapi aman dibiarkan)
 function toSearchParams(obj){
   const sp = new URLSearchParams();
   Object.entries(obj || {}).forEach(([k,v]) => {
@@ -131,6 +165,9 @@ function toSearchParams(obj){
   return sp;
 }
 
+// =====================
+// Core API Call
+// =====================
 export async function apiCall(action, params = {}, { timeoutMs = 20000 } = {}){
   const baseUrl = String(API.url || '').trim();
   if (!baseUrl || !baseUrl.includes('/exec')) {
@@ -142,87 +179,105 @@ export async function apiCall(action, params = {}, { timeoutMs = 20000 } = {}){
   // =====================================================
   // OFFLINE SMART FALLBACKS (tanpa harus memanggil server)
   // =====================================================
-  // getScanCandidates harus tetap bisa jalan offline (scan + input manual)
-  if (!isOnline() && action === 'getScanCandidates'){
-    const tripId = String(params.tripId || '').trim();
-    const q = String(params.q || '').trim().toLowerCase();
-    const limit = Math.min(Math.max(Number(params.limit||80), 10), 200);
 
-    const sessionId = params.sessionId; // dipakai hanya untuk cari coordinatorNik (nik login)
-    // NOTE: userId (nik) tidak kita simpan di cacheKey, jadi ambil dari params jika ada
-    const coordinatorNik = String(params.coordinatorNik || params.nik || '').trim() || '';
+  // 1) getScanCandidates harus tetap bisa jalan offline (scan + input manual)
+  if (!isOnline() && action === 'getScanCandidates'){
+    const tripId = normStr(params.tripId || '');
+    const q = normKey(params.q || '');
+    const limit = Math.min(Math.max(Number(params.limit || 80), 10), 200);
+
+    // userId (nik) tidak kita simpan di cacheKey, jadi ambil dari params
+    const coordinatorNik = normStr(params.coordinatorNik || params.nik || '');
 
     const parts = await getCachedParticipantsAll(tripId);
     const vehicles = await getCachedVehicles(tripId);
     const nikToVeh = buildNikToVehicleFromVehicles(vehicles);
 
-    // affiliated: MainNIK == coordinatorNik (atau fallback: kosong jika tidak ada)
-    const aff = coordinatorNik
-      ? parts.filter(p=> String(p.MainNIK||p.mainNik||'').trim()===coordinatorNik)
-      : [];
+    const cn = normStr(coordinatorNik);
 
-    // include self jika ada
-    if (coordinatorNik){
-      const self = parts.find(p=> String(p.NIK||p.nik||'').trim()===coordinatorNik);
-      if (self && !aff.some(x=>String(x.NIK||x.nik||'').trim()===coordinatorNik)) aff.unshift(self);
-    }
-
-    let other = [];
-    if (q){
-      other = parts.filter(p=>{
-        const nik = String(p.NIK||p.nik||'').toLowerCase();
-        const nama = String(p.Nama||p.nama||'').toLowerCase();
-        const rel = String(p.Relationship||p.relationship||'').toLowerCase();
-        return nik.includes(q) || nama.includes(q) || rel.includes(q);
-      }).slice(0, limit);
+    // affiliated: MainNIK == coordinatorNik, plus self
+    const aff = cn ? parts.filter(p => getMainNik(p) === cn) : [];
+    if (cn){
+      const self = parts.find(p => getNik(p) === cn);
+      if (self && !aff.some(x => getNik(x) === cn)) aff.unshift(self);
     }
 
     const pack = (p)=>{
-      const nik = String(p.NIK||p.nik||'').trim();
+      const nik = getNik(p);
       return {
         nik,
-        nama: p.Nama || p.nama || '',
-        relationship: p.Relationship || p.relationship || '',
-        region: p.Region || p.region || '',
-        estate: p.Estate || p.estate || '',
-        arrived: boolish(p.Arrived ?? p.arrived),
-        vehicle: p.Vehicle || p.vehicle || '',
-        mainNik: p.MainNIK || p.mainNik || '',
+        nama: getNama(p),
+        relationship: getRel(p),
+        region: normStr(p?.Region ?? p?.region ?? ''),
+        estate: normStr(p?.Estate ?? p?.estate ?? ''),
+        arrived: getArrivedField(p),
+        vehicle: getVehicleField(p),
+        mainNik: getMainNik(p),
         inVehicle: nikToVeh[nik] || ''
       };
     };
 
+    // search
+    let other = [];
+    if (q){
+      other = parts.filter(p=>{
+        const nik  = normKey(getNik(p));
+        const nama = normKey(getNama(p));
+        const rel  = normKey(getRel(p));
+        return nik.includes(q) || nama.includes(q) || rel.includes(q);
+      }).slice(0, limit);
+    }
+
     return {
       success: true,
       offline: true,
-      coordinatorNik: coordinatorNik,
+      coordinatorNik,
       affiliated: (aff||[]).map(pack),
       search: (other||[]).map(pack)
     };
   }
 
-  // getVehicles(q) harus bisa offline: cari dari cache getVehicles(q:'')
+  // 2) getVehicles(q) harus bisa offline: cari dari cache getVehicles(q:'')
+  // FIX: normalize + toleransi format scan "berisik"
   if (!isOnline() && action === 'getVehicles'){
-    const tripId = String(params.tripId || '').trim();
-    const q = String(params.q || '').trim();
+    const tripId = normStr(params.tripId || '');
+    const qRaw = normStr(params.q || '');
+    const q = normKey(qRaw);
+
     if (q){
-      const v1 = await getCachedJson('getVehicles', { tripId, q: '' });
-      const list = (v1 && Array.isArray(v1.vehicles)) ? v1.vehicles : [];
-      const found = list.find(v=> String(v.Code||v.code||'')===q || String(v.Barcode||v.barcode||'')===q);
+      const list = await getCachedVehicles(tripId);
+
+      const found = (list||[]).find(v=>{
+        const code = normKey(v.Code || v.code);
+        const barcode = normKey(v.Barcode || v.barcode);
+        return (code && code === q) || (barcode && barcode === q);
+      });
+
       if (found){
         return { success:true, offline:true, vehicle: found };
       }
+
+      // bonus: kalau hasil scan berisi tambahan karakter (mis: "CODE|xxx" atau "CODE-2026")
+      const found2 = (list||[]).find(v=>{
+        const code = normKey(v.Code || v.code);
+        const barcode = normKey(v.Barcode || v.barcode);
+        return (code && q.includes(code)) || (barcode && q.includes(barcode));
+      });
+
+      if (found2){
+        return { success:true, offline:true, vehicle: found2 };
+      }
+      // kalau tidak ketemu, lanjut ke mekanisme cacheKey biasa (kalau pernah tersimpan spesifik q)
     }
-    // kalau q kosong, biarkan mekanisme cacheKey berjalan (akan return cached list)
   }
 
-  // ✅ kalau offline dan aksi bisa di-cache, kembalikan cache dulu
+  // 3) kalau offline dan aksi bisa di-cache, kembalikan cache dulu
   if (!isOnline() && ck){
     const cached = await kvGet(ck);
     if (cached && cached.value) return cached.value;
   }
 
-  // ✅ kalau offline dan aksi bisa di-queue, simpan antrian lalu return sukses (queued)
+  // 4) kalau offline dan aksi bisa di-queue, simpan antrian lalu return sukses (queued)
   if (!isOnline() && QUEUEABLE.has(action)){
     const opId = uuid();
     const toQueue = { ...(params||{}), _opId: opId };
@@ -230,6 +285,9 @@ export async function apiCall(action, params = {}, { timeoutMs = 20000 } = {}){
     return { success:true, queued:true, opId, message:'Tersimpan di antrian. Akan dikirim saat online.' };
   }
 
+  // =====================
+  // Network call
+  // =====================
   const controller = new AbortController();
   const t = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -264,64 +322,86 @@ export async function apiCall(action, params = {}, { timeoutMs = 20000 } = {}){
       throw err;
     }
 
-    // ✅ simpan cache
+    // simpan cache
     if (ck){
       try{ await kvSet(ck, json); }catch{}
     }
     return json;
+
   } catch(err){
-    // ✅ fallback cache jika error jaringan
+
+    // fallback cache jika error jaringan
     if (ck){
       try{
         const cached = await kvGet(ck);
         if (cached && cached.value) return cached.value;
       }catch{}
     }
-    // ✅ jika request gagal karena offline, dan queueable -> queue
+
+    // jika request gagal karena offline, dan queueable -> queue
     if (!isOnline() && QUEUEABLE.has(action)){
       const opId = uuid();
       const toQueue = { ...(params||{}), _opId: opId };
       try{ await queueAdd({ opId, action, params: toQueue }); }catch{}
       return { success:true, queued:true, opId, message:'Tersimpan di antrian. Akan dikirim saat online.' };
     }
+
     throw err;
+
   } finally {
     clearTimeout(t);
   }
 }
 
-// ===== Sync Queue Processor =====
+// =====================
+// Sync Queue Processor (legacy helper)
+// =====================
 export async function processOfflineQueue(sessionId, { max = 50 } = {}){
   if (!isOnline()) return { success:false, message:'Offline', processed:0 };
+
   const items = await queueList({});
-  const pending = items.filter(x => x.status === 'pending' || x.status === 'failed').slice(0, max);
+  const pending = items
+    .filter(x => x.status === 'pending' || x.status === 'failed')
+    .slice(0, max);
+
   let processed = 0;
+
   for (const it of pending){
     const id = it.id;
     const action = it.action;
     const params = { ...(it.params||{}), sessionId };
     const now = Date.now();
+
     try{
-      await queueUpdate(id, { status:'sending', lastAttemptAt: now, attempts: (it.attempts||0)+1, lastError:'' });
+      await queueUpdate(id, {
+        status:'sending',
+        lastAttemptAt: now,
+        attempts: (it.attempts||0)+1,
+        lastError:''
+      });
+
       const res = await apiCall(action, params, { timeoutMs: 25000 });
+
       if (res && res.success !== false){
         await queueUpdate(id, { status:'synced', result: res, syncedAt: Date.now(), lastError:'' });
       } else {
         await queueUpdate(id, { status:'failed', result: res, lastError: (res?.message||'Gagal') });
       }
       processed++;
+
     } catch(e){
       await queueUpdate(id, { status:'failed', lastError: String(e?.message||e) });
       processed++;
     }
   }
+
   return { success:true, processed };
 }
 
-// ===== wrappers (kompatibel dengan pemanggilan api.login(), api.getConfig(), dst) =====
-
+// =====================
+// Wrappers
+// =====================
 export async function getConfig(){
-  // aman pakai GET
   return apiCall('getConfig', {}, { method: 'GET' });
 }
 
@@ -354,7 +434,6 @@ export async function updateLocation(sessionId, vehicleCode, lat, lng){
 }
 
 export async function assignVehicle(sessionId, vehicleCode, nikList, tripId){
-  // nikList boleh array
   return apiCall('assignVehicle', { sessionId, vehicleCode, nikList, tripId });
 }
 
@@ -376,7 +455,6 @@ export async function adminGet(sessionId, dataType, tripId){
 }
 
 export async function adminUpdate(sessionId, dataType, op, data){
-  // op = 'add' | 'update' | dll
   return apiCall('adminUpdate', {
     sessionId,
     dataType,
@@ -390,9 +468,8 @@ export async function getMapData(sessionId, tripId, includeManifest = 0){
 }
 
 // =============================
-// Offline Queue Sync Processor
+// Offline Queue Sync Processor (UI uses this)
 // =============================
-
 export async function getQueueSummary(){
   const all = await queueList();
   const sum = { pending:0, failed:0, synced:0, total:0 };
@@ -407,6 +484,7 @@ export async function getQueueSummary(){
 
 export async function processQueue(sessionId, { maxItems = 50 } = {}){
   if (!isOnline()) return { success:false, message:'Offline', processed:0 };
+
   const list = (await queueList({ status:'pending' })) || [];
   let processed = 0;
 
@@ -414,10 +492,12 @@ export async function processQueue(sessionId, { maxItems = 50 } = {}){
     const id = item.id;
     try{
       await queueUpdate(id, { attempts:(item.attempts||0)+1, lastAttemptAt:Date.now(), lastError:'' });
+
       const p = item.params || {};
-      // pastikan sessionId terbaru
       p.sessionId = sessionId;
+
       const res = await apiCall(item.action, p, { timeoutMs: 25000 });
+
       if (res && res.success){
         await queueUpdate(id, { status:'synced', result:res, syncedAt:Date.now() });
       } else {
@@ -428,15 +508,14 @@ export async function processQueue(sessionId, { maxItems = 50 } = {}){
     }
     processed++;
   }
+
   return { success:true, processed };
 }
 
 export async function retryFailed(sessionId, { maxItems = 50 } = {}){
-  // ubah status failed -> pending lalu proses
   const failed = (await queueList({ status:'failed' })) || [];
   for (const it of failed.slice(0, maxItems)){
     await queueUpdate(it.id, { status:'pending', lastError:'' });
   }
   return processQueue(sessionId, { maxItems });
 }
-

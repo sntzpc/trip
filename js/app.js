@@ -712,3 +712,72 @@ setInterval(()=>{
     hour:'2-digit', minute:'2-digit', second:'2-digit'
   });
 }, 1000);
+
+// ============================
+// ✅ HARD REFRESH + DISABLE PULL-TO-REFRESH (Mobile)
+// ============================
+
+// tombol header: hard refresh
+window.hardRefresh = async () => {
+  try{
+    showNotification('Memuat ulang aplikasi...', 'info', 1200);
+  }catch{}
+
+  // 1) update service worker (kalau ada)
+  try{
+    if ('serviceWorker' in navigator){
+      const reg = await navigator.serviceWorker.getRegistration();
+      if (reg) await reg.update().catch(()=>{});
+    }
+  }catch{}
+
+  // 2) hapus cache shell (opsional, tapi ini yang membuat "hard refresh" benar-benar fresh)
+  try{
+    if ('caches' in window){
+      const keys = await caches.keys();
+      // hapus semua cache yang diawali "trip_tracker_shell"
+      await Promise.all(keys.map(k => k.startsWith('trip_tracker_shell') ? caches.delete(k) : null));
+    }
+  }catch{}
+
+  // 3) reload dengan cache-busting param
+  try{
+    const u = new URL(location.href);
+    u.searchParams.set('_r', String(Date.now()));
+    location.replace(u.toString());
+  }catch{
+    location.reload();
+  }
+};
+
+// disable pull-to-refresh (khusus mobile)
+(function disablePullToRefresh(){
+  // cara paling aman: ketika scroll sudah di top, blok gesture pull-down yang memicu refresh
+  let startY = 0;
+  let isAtTop = true;
+
+  window.addEventListener('scroll', () => {
+    isAtTop = (window.scrollY <= 0);
+  }, { passive: true });
+
+  window.addEventListener('touchstart', (e) => {
+    if (!e.touches || !e.touches.length) return;
+    startY = e.touches[0].clientY;
+  }, { passive: true });
+
+  window.addEventListener('touchmove', (e) => {
+    if (!e.touches || !e.touches.length) return;
+    const y = e.touches[0].clientY;
+
+    // kalau user tarik ke bawah saat posisi top -> prevent agar tidak terjadi refresh
+    if (isAtTop && (y - startY) > 10){
+      e.preventDefault();
+    }
+  }, { passive: false });
+
+  // opsi tambahan: matikan overscroll glow/bounce untuk browser yang support
+  try{
+    document.documentElement.style.overscrollBehaviorY = 'none';
+    document.body.style.overscrollBehaviorY = 'none';
+  }catch{}
+})();

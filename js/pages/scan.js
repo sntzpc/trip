@@ -50,20 +50,26 @@ export async function manualSubmit(session){
 }
 
 async function handleCode(session, codeOrBarcode){
-  const res = await api.apiCall('getVehicles', {
-    sessionId: session.sessionId,
-    q: codeOrBarcode,
-    tripId: session.activeTripId || ''
-  });
+  let res;
+  try{
+    res = await api.apiCall('getVehicles', {
+      sessionId: session.sessionId,
+      q: codeOrBarcode,
+      tripId: session.activeTripId || ''
+    });
+  }catch(e){
+    // ini biar pesannya lebih jelas kalau offline
+    if (navigator.onLine === false){
+      throw new Error('Mode offline: kendaraan tidak ditemukan. Pastikan sudah pernah login online pertamakali.');
+    }
+    throw e;
+  }
 
   const v = res.vehicle;
   if (!v) throw new Error('Kendaraan tidak ditemukan');
 
   pendingVehicle = v;
-
-  // ✅ reset keranjang setiap kendaraan baru
   selectedNiks = new Set();
-
   renderResult(v);
 
   try{
@@ -72,6 +78,7 @@ async function handleCode(session, codeOrBarcode){
     showNotification(e.message || 'Gagal memuat kandidat', 'warning');
   }
 }
+
 
 function renderResult(v){
   const wrap = $('#scanResult');

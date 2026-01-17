@@ -69,8 +69,14 @@
                     <span id="currentDateTime"></span>
                 </div>
             </div>
-            <div class="header-right">
-                <button class="btn-logout" onclick="logout()">
+            <div class="header-right" style="display:flex; gap:8px; align-items:center;">
+                <!-- ✅ Hard Refresh -->
+                <button class="btn-logout" title="Hard Refresh" onclick="hardRefresh()">
+                    <i class="fas fa-rotate-right"></i>
+                </button>
+
+                <!-- Logout -->
+                <button class="btn-logout" title="Logout" onclick="logout()">
                     <i class="fas fa-sign-out-alt"></i>
                 </button>
             </div>

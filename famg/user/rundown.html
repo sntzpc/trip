@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Rundown - Operator</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="config.js"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <link rel="stylesheet" href="css/styles.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&family=Montserrat:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body class="bg-gradient-to-br from-gray-50 to-blue-50 font-poppins" data-page="rundown">
+  <header class="sticky top-0 z-50 bg-white shadow-lg">
+    <div class="container mx-auto px-4 py-3 flex justify-between items-center">
+      <div class="flex items-center space-x-3">
+        <div class="w-12 h-12 bg-gradient-to-r from-blue-600 to-teal-500 rounded-xl flex items-center justify-center">
+          <i class="fas fa-calendar-day text-white text-xl"></i>
+        </div>
+        <div>
+          <h1 class="text-xl font-bold text-gray-800" id="rd-header-title">Rundown Operator</h1>
+          <p class="text-sm text-gray-600" id="rd-header-subtitle">Pilih acara yang sedang tampil di aplikasi peserta</p>
+        </div>
+      </div>
+      <div class="flex items-center gap-3">
+        <a href="index.html" class="text-gray-600 hover:text-blue-700"><i class="fas fa-home mr-1"></i>User App</a>
+        <a href="admin.html" class="text-gray-600 hover:text-blue-700"><i class="fas fa-screwdriver-wrench mr-1"></i>Admin</a>
+        <button id="btn-logout" class="hidden text-gray-600 hover:text-red-600"><i class="fas fa-sign-out-alt"></i></button>
+      </div>
+    </div>
+  </header>
+
+  <main class="container mx-auto px-4 py-8">
+    <section id="login" class="max-w-md mx-auto bg-white rounded-2xl shadow-xl p-8">
+      <h2 class="text-2xl font-bold text-gray-800 mb-2">Login Operator</h2>
+      <p class="text-gray-600 mb-6">Role: <b>OPERATOR</b> atau <b>ADMIN</b>.</p>
+      <div class="space-y-4">
+        <div>
+          <label class="block text-gray-700 font-medium mb-2">Username</label>
+          <input id="username" class="w-full p-3 border border-gray-300 rounded-xl" placeholder="operator" />
+        </div>
+        <div>
+          <label class="block text-gray-700 font-medium mb-2">Password</label>
+          <input id="password" type="password" class="w-full p-3 border border-gray-300 rounded-xl" placeholder="******" />
+        </div>
+        <button id="btn-login" class="w-full bg-gradient-to-r from-blue-600 to-teal-500 text-white font-semibold py-3 rounded-xl">
+          <i class="fas fa-right-to-bracket mr-2"></i>Masuk
+        </button>
+        <div id="login-error" class="hidden p-3 bg-red-50 border border-red-200 rounded-xl text-red-700 text-sm"></div>
+      </div>
+    </section>
+
+    <section id="panel" class="hidden space-y-6">
+      <div class="bg-white rounded-2xl shadow-lg p-6">
+        <div class="flex items-center justify-between">
+          <div>
+            <h3 class="text-xl font-bold text-gray-800">Acara Aktif</h3>
+            <p id="current" class="text-gray-600">-</p>
+          </div>
+          <button id="btn-refresh" class="text-gray-600 hover:text-blue-700"><i class="fas fa-rotate mr-1"></i>Refresh</button>
+        </div>
+      </div>
+
+      <div class="bg-white rounded-2xl shadow-lg p-6">
+        <h3 class="text-xl font-bold text-gray-800">Daftar Rundown</h3>
+        <p class="text-gray-600 text-sm mb-4">Klik tombol <b>Tampilkan</b> untuk mengubah acara aktif.</p>
+        <div id="events" class="space-y-3"></div>
+      </div>
+    </section>
+  </main>
+
+  <script src="js/utils.js"></script>
+  <script src="js/api.js"></script>
+  <script src="js/branding.js"></script>
+  <script src="js/operator_rundown.js"></script>
+</body>
+</html>

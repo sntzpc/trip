@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Admin Panel - Family Gathering</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="config.js"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <link rel="stylesheet" href="css/styles.css">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='64' height='64' viewBox='0 0 64 64'%3E%3Ctext y='50' x='10' font-size='56'%3E🤝%3C/text%3E%3C/svg%3E" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&family=Montserrat:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body class="bg-gradient-to-br from-gray-50 to-blue-50 font-poppins">
+  <header class="sticky top-0 z-50 bg-white shadow-lg">
+    <div class="container mx-auto px-4 py-3 flex justify-between items-center">
+      <div class="flex items-center space-x-3">
+        <div class="w-12 h-12 bg-gradient-to-r from-blue-600 to-teal-500 rounded-xl flex items-center justify-center">
+          <span class="text-white font-bold text-xl">KG</span>
+        </div>
+        <div>
+          <h1 class="text-xl font-bold text-gray-800">Admin Panel</h1>
+          <p class="text-sm text-gray-600">Family Gathering KMP1 2026</p>
+        </div>
+      </div>
+      <div class="flex items-center gap-3">
+        <a href="index.html" class="text-gray-600 hover:text-blue-700"><i class="fas fa-home mr-1"></i>User App</a>
+        <button id="btn-logout" class="hidden text-gray-600 hover:text-red-600"><i class="fas fa-sign-out-alt"></i></button>
+      </div>
+    </div>
+  </header>
+
+  <main class="container mx-auto px-4 py-8">
+    <!-- Login -->
+    <section id="login" class="max-w-md mx-auto bg-white rounded-2xl shadow-xl p-8">
+      <h2 class="text-2xl font-bold text-gray-800 mb-2">Login Admin</h2>
+      <p class="text-gray-600 mb-6">Masuk dengan akun role <b>ADMIN</b>.</p>
+      <div class="space-y-4">
+        <div>
+          <label class="block text-gray-700 font-medium mb-1">Username</label>
+          <input id="username" class="w-full p-3 border rounded-xl" placeholder="admin" />
+        </div>
+        <div>
+          <label class="block text-gray-700 font-medium mb-1">Password</label>
+          <input id="password" type="password" class="w-full p-3 border rounded-xl" placeholder="••••••••" />
+        </div>
+        <button id="btn-login" class="w-full bg-gradient-to-r from-blue-600 to-teal-500 text-white font-semibold py-3 rounded-xl hover:opacity-90">
+          <i class="fas fa-lock mr-2"></i>Login
+        </button>
+        <div id="login-error" class="hidden p-3 bg-red-50 border border-red-200 rounded-xl text-red-700 text-sm"></div>
+      </div>
+    </section>
+
+    <!-- Panel -->
+    <section id="panel" class="hidden">
+      <div class="bg-white rounded-2xl shadow-lg p-4 mb-6 flex flex-wrap gap-2">
+        <button class="tab-btn px-4 py-2 rounded-xl bg-blue-600 text-white" data-tab="participants"><i class="fas fa-users mr-2"></i>Peserta</button>
+        <button class="tab-btn px-4 py-2 rounded-xl bg-gray-100" data-tab="events"><i class="fas fa-calendar-alt mr-2"></i>Rundown</button>
+        <button class="tab-btn px-4 py-2 rounded-xl bg-gray-100" data-tab="prizes"><i class="fas fa-gift mr-2"></i>Doorprize</button>
+        <button class="tab-btn px-4 py-2 rounded-xl bg-gray-100" data-tab="users"><i class="fas fa-user-shield mr-2"></i>User Panel</button>
+        <button class="tab-btn px-4 py-2 rounded-xl bg-gray-100" data-tab="control"><i class="fas fa-bolt mr-2"></i>Kontrol</button>
+      </div>
+
+      <div id="tab-participants" class="tab bg-white rounded-2xl shadow-lg p-6"></div>
+      <div id="tab-events" class="tab hidden bg-white rounded-2xl shadow-lg p-6"></div>
+      <div id="tab-prizes" class="tab hidden bg-white rounded-2xl shadow-lg p-6"></div>
+      <div id="tab-users" class="tab hidden bg-white rounded-2xl shadow-lg p-6"></div>
+      <div id="tab-control" class="tab hidden bg-white rounded-2xl shadow-lg p-6"></div>
+    </section>
+  </main>
+
+  <script src="js/utils.js"></script>
+  <script src="js/api.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <script src="js/admin_panel.js"></script>
+</body>
+</html>

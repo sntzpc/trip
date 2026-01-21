@@ -1,0 +1,60 @@
+[
+  {
+    "nik": "12345678",
+    "name": "Budi Santoso",
+    "position": "Manager",
+    "department": "Produksi",
+    "family": [
+      "Budi Santoso",
+      "Sari Dewi (Istri)",
+      "Rizky Pratama (Anak)",
+      "Sinta Noviana (Anak)"
+    ]
+  },
+  {
+    "nik": "87654321",
+    "name": "Ahmad Hidayat",
+    "position": "Supervisor",
+    "department": "Keuangan",
+    "family": [
+      "Ahmad Hidayat",
+      "Lisa Permata (Istri)",
+      "Fajar Ramadan (Anak)"
+    ]
+  },
+  {
+    "nik": "11223344",
+    "name": "Siti Nurhaliza",
+    "position": "Staff",
+    "department": "SDM",
+    "family": [
+      "Siti Nurhaliza",
+      "Rudi Hartono (Suami)",
+      "Maya Indah (Anak)",
+      "Dika Pratama (Anak)"
+    ]
+  },
+  {
+    "nik": "55667788",
+    "name": "Rina Wijaya",
+    "position": "Manager",
+    "department": "Pemasaran",
+    "family": [
+      "Rina Wijaya",
+      "Joko Susilo (Suami)"
+    ]
+  },
+  {
+    "nik": "99887766",
+    "name": "Andi Setiawan",
+    "position": "Direktur",
+    "department": "Direksi",
+    "family": [
+      "Andi Setiawan",
+      "Mira Lestari (Istri)",
+      "Kevin Maulana (Anak)",
+      "Sari Dewi (Anak)",
+      "Budi Santoso (Anak)"
+    ]
+  }
+]

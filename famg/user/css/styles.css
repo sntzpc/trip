@@ -1,0 +1,445 @@
+/* Custom Styles */
+.font-poppins {
+    font-family: 'Poppins', sans-serif;
+}
+
+.font-montserrat {
+    font-family: 'Montserrat', sans-serif;
+}
+
+/* Animations */
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+
+@keyframes slideIn {
+    from { transform: translateX(-20px); opacity: 0; }
+    to { transform: translateX(0); opacity: 1; }
+}
+
+@keyframes slideUp {
+    from {
+        opacity: 0;
+        transform: translateY(20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.animate-fade-in {
+    animation: fadeIn 0.5s ease-out;
+}
+
+.animate-pulse-slow {
+    animation: pulse 2s infinite;
+}
+
+.animate-slide-in {
+    animation: slideIn 0.3s ease-out;
+}
+
+.animate-slide-up {
+    animation: slideUp 0.3s ease-out;
+}
+
+/* Doorprize Winner Card Animation */
+.doorprize-winner {
+    animation: fadeIn 0.5s ease-out;
+    transition: all 0.3s ease;
+}
+
+.doorprize-winner.confirmed {
+    border-color: #10B981;
+    background-color: #F0FDF4;
+}
+
+.doorprize-winner.expired {
+    border-color: #EF4444;
+    background-color: #FEF2F2;
+}
+
+/* Custom Checkbox */
+.checkbox-custom {
+    appearance: none;
+    width: 24px;
+    height: 24px;
+    border: 2px solid #D1D5DB;
+    border-radius: 6px;
+    cursor: pointer;
+    position: relative;
+    transition: all 0.2s;
+}
+
+.checkbox-custom:checked {
+    background-color: #3B82F6;
+    border-color: #3B82F6;
+}
+
+.checkbox-custom:checked::after {
+    content: '✓';
+    position: absolute;
+    color: white;
+    font-size: 14px;
+    font-weight: bold;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+}
+
+.checkbox-custom:focus {
+    outline: none;
+    /* Koreksi: ganti ring dengan box-shadow */
+    box-shadow: 0 0 0 3px rgba(147, 197, 253, 0.5);
+    /* Atau alternatif dengan outline */
+    /* outline: 2px solid #93C5FD;
+    outline-offset: 2px; */
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+    width: 8px;
+}
+
+::-webkit-scrollbar-track {
+    background: #F1F5F9;
+    border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb {
+    background: #CBD5E1;
+    border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: #94A3B8;
+}
+
+/* Responsive Adjustments */
+@media (max-width: 768px) {
+    .container {
+        padding-left: 1rem;
+        padding-right: 1rem;
+    }
+    
+    #auth-section {
+        padding: 1.5rem;
+    }
+}
+
+/* Animasi untuk timeline */
+.timeline-item {
+    position: relative;
+    padding-left: 2rem;
+}
+
+.timeline-item::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 0.5rem;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background-color: #3B82F6;
+    border: 3px solid white;
+    box-shadow: 0 0 0 3px #3B82F6;
+}
+
+/* Custom scrollbar untuk modal */
+.modal-scroll::-webkit-scrollbar {
+    width: 6px;
+}
+
+.modal-scroll::-webkit-scrollbar-track {
+    background: #F1F5F9;
+    border-radius: 3px;
+}
+
+.modal-scroll::-webkit-scrollbar-thumb {
+    background: #CBD5E1;
+    border-radius: 3px;
+}
+
+.modal-scroll::-webkit-scrollbar-thumb:hover {
+    background: #94A3B8;
+}
+
+/* Responsive adjustments untuk modal */
+@media (max-width: 768px) {
+    #day-detail-modal .modal-content {
+        margin: 1rem;
+        max-height: 85vh;
+    }
+}
+
+/* Warna untuk setiap hari */
+.bg-blue-50 { background-color: #eff6ff; }
+.bg-green-50 { background-color: #f0fdf4; }
+.bg-purple-50 { background-color: #faf5ff; }
+.bg-orange-50 { background-color: #fff7ed; }
+
+.border-blue-500 { border-color: #3b82f6; }
+.border-green-500 { border-color: #10b981; }
+.border-purple-500 { border-color: #8b5cf6; }
+.border-orange-500 { border-color: #f97316; }
+
+.text-blue-600 { color: #2563eb; }
+.text-green-600 { color: #059669; }
+.text-purple-600 { color: #7c3aed; }
+.text-orange-600 { color: #ea580c; }
+
+.text-blue-700 { color: #1d4ed8; }
+.text-green-700 { color: #047857; }
+.text-purple-700 { color: #6d28d9; }
+.text-orange-700 { color: #c2410c; }
+
+.text-blue-800 { color: #1e40af; }
+.text-green-800 { color: #065f46; }
+.text-purple-800 { color: #5b21b6; }
+.text-orange-800 { color: #9a3412; }
+
+/* Gradien warna untuk setiap hari */
+.bg-gradient-to-r.from-blue-600 { 
+    background-image: linear-gradient(to right, #2563eb, var(--tw-gradient-to, transparent));
+}
+.bg-gradient-to-r.to-blue-400 { 
+    --tw-gradient-to: #60a5fa;
+}
+
+.bg-gradient-to-r.from-green-600 { 
+    background-image: linear-gradient(to right, #059669, var(--tw-gradient-to, transparent));
+}
+.bg-gradient-to-r.to-green-400 { 
+    --tw-gradient-to: #34d399;
+}
+
+.bg-gradient-to-r.from-purple-600 { 
+    background-image: linear-gradient(to right, #7c3aed, var(--tw-gradient-to, transparent));
+}
+.bg-gradient-to-r.to-purple-400 { 
+    --tw-gradient-to: #a78bfa;
+}
+
+.bg-gradient-to-r.from-orange-600 { 
+    background-image: linear-gradient(to right, #ea580c, var(--tw-gradient-to, transparent));
+}
+.bg-gradient-to-r.to-orange-400 { 
+    --tw-gradient-to: #fb923c;
+}
+
+/* Untuk inline style di JavaScript */
+.from-blue-600 { background-color: #2563eb; }
+.to-blue-400 { background-color: #60a5fa; }
+
+.from-green-600 { background-color: #059669; }
+.to-green-400 { background-color: #34d399; }
+
+.from-purple-600 { background-color: #7c3aed; }
+.to-purple-400 { background-color: #a78bfa; }
+
+.from-orange-600 { background-color: #ea580c; }
+.to-orange-400 { background-color: #fb923c; }
+
+/* Utility classes untuk ikon warna */
+.icon-blue { color: #2563eb; }
+.icon-green { color: #059669; }
+.icon-purple { color: #7c3aed; }
+.icon-orange { color: #ea580c; }
+
+/* Background untuk ikon */
+.bg-icon-blue { background-color: #dbeafe; }
+.bg-icon-green { background-color: #d1fae5; }
+.bg-icon-purple { background-color: #ede9fe; }
+.bg-icon-orange { background-color: #ffedd5; }
+
+/* Override untuk Tailwind gradient jika diperlukan */
+.gradient-blue {
+    background: linear-gradient(to right, #2563eb, #60a5fa);
+}
+
+.gradient-green {
+    background: linear-gradient(to right, #059669, #34d399);
+}
+
+.gradient-purple {
+    background: linear-gradient(to right, #7c3aed, #a78bfa);
+}
+
+.gradient-orange {
+    background: linear-gradient(to right, #ea580c, #fb923c);
+}
+
+/* Transisi untuk hover */
+.hover-lift {
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.hover-lift:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+}
+
+/* Loading animation */
+.loading-spinner {
+    width: 40px;
+    height: 40px;
+    border: 4px solid #f3f3f3;
+    border-top: 4px solid #3b82f6;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+/* Tooltip */
+.tooltip {
+    position: relative;
+}
+
+.tooltip:hover::after {
+    content: attr(data-tooltip);
+    position: absolute;
+    bottom: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    background-color: #1f2937;
+    color: white;
+    padding: 0.5rem 0.75rem;
+    border-radius: 0.375rem;
+    font-size: 0.875rem;
+    white-space: nowrap;
+    z-index: 10;
+    margin-bottom: 0.5rem;
+}
+
+.tooltip:hover::before {
+    content: '';
+    position: absolute;
+    bottom: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    border: 5px solid transparent;
+    border-top-color: #1f2937;
+    margin-bottom: 0;
+}
+
+#auth-section * {
+  max-width: 100%;
+}
+
+/* Animasi untuk notifikasi */
+@keyframes slideIn {
+  from {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+@keyframes fadeOut {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+.doorprize-notification {
+  animation: slideIn 0.3s ease-out;
+}
+
+.doorprize-notification.fade-out {
+  animation: fadeOut 0.3s ease-out forwards;
+}
+
+/* Animasi untuk pemenang */
+@keyframes pulse-glow {
+  0%, 100% {
+    box-shadow: 0 0 5px rgba(255, 215, 0, 0.5);
+  }
+  50% {
+    box-shadow: 0 0 20px rgba(255, 215, 0, 0.8);
+  }
+}
+
+.winner-glow {
+  animation: pulse-glow 2s infinite;
+}
+
+/* ===== FG Premium Countdown UI ===== */
+
+  /* badge transition halus */
+  .fg-badge {
+    transition: background-color .35s ease, color .35s ease, border-color .35s ease;
+  }
+
+  /* progress bar container */
+  .fg-progress {
+    height: 6px;
+    border-radius: 999px;
+    overflow: hidden;
+    background: rgba(15, 23, 42, .08); /* slate */
+  }
+
+  /* progress bar fill */
+  .fg-progress > .fg-bar {
+    height: 100%;
+    width: 0%;
+    border-radius: 999px;
+    transition: width .55s ease;
+    background: linear-gradient(90deg, rgba(37,99,235,.95), rgba(20,184,166,.95));
+  }
+
+  /* indeterminate (sebelum dibuka / ditutup) */
+  .fg-progress.is-indeterminate > .fg-bar {
+    width: 40%;
+    animation: fg-indeterminate 1.15s ease-in-out infinite;
+  }
+  @keyframes fg-indeterminate {
+    0%   { transform: translateX(-120%); }
+    100% { transform: translateX(260%); }
+  }
+
+  /* shimmer button saat OPEN */
+  .fg-shimmer {
+    position: relative;
+    overflow: hidden;
+  }
+  .fg-shimmer::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    transform: translateX(-120%);
+    background: linear-gradient(
+      110deg,
+      rgba(255,255,255,0) 0%,
+      rgba(255,255,255,.35) 45%,
+      rgba(255,255,255,0) 80%
+    );
+    animation: fg-shimmer 1.6s ease-in-out infinite;
+  }
+  @keyframes fg-shimmer {
+    0%   { transform: translateX(-120%); }
+    100% { transform: translateX(120%); }
+  }
+
+  /* shimmer stop kalau disabled */
+  button:disabled.fg-shimmer::after {
+    animation: none !important;
+    display: none !important;
+  }

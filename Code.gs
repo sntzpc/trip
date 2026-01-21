@@ -684,7 +684,7 @@ function getMapData(params){
     if (tripId && iTrip>-1 && String(row[iTrip]||'') !== tripId) continue;
 
     const passengers = (iPass>-1 && row[iPass])
-      ? String(row[iPass]).split(',').map(s=>s.trim()).filter(Boolean)
+      ? String(row[iPass]).split(';').map(s=>s.trim()).filter(Boolean)
       : [];
 
     vehicles.push({

@@ -1,6 +1,6 @@
 /* Trip Tracker Service Worker (offline shell) */
 
-const CACHE_NAME = 'trip_tracker_shell_v2';
+const CACHE_NAME = 'trip_tracker_shell_v3';
 const ASSETS = [
   './',
   './index.html',

@@ -469,6 +469,19 @@ export async function getMapDataOffline(sessionId, tripId){
   };
 }
 
+export async function mapFast(sessionId, codes = [], limit = 250){
+  // backend map.fast mengharapkan codes sebagai CSV string
+  const codesCsv = Array.isArray(codes)
+    ? codes.map(x => String(x || '').trim()).filter(Boolean).join(',')
+    : String(codes || '').trim();
+
+  return apiCall('map.fast', {
+    sessionId,
+    limit: Number(limit || 250),
+    ...(codesCsv ? { codes: codesCsv } : {})
+  }, { timeoutMs: 12000 });
+}
+
 // ✅ PUBLIC: ambil manifest offline-first untuk 1 vehicle
 export async function getVehicleManifestOffline(tripId, vehicleCode){
   const code = String(vehicleCode||'').trim();

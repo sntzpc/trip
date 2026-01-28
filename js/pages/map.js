@@ -35,6 +35,120 @@ function randJitterMs(){
   return Math.floor(Math.random() * (TRACK_JITTER_MAX_MS + 1));
 }
 
+// ===== FAST MAP POLLING (realtime marker) =====
+const MAP_FAST_MS = 3000; // 3 detik (naikkan ke 5000 kalau trafik tinggi)
+let fastTimer = null;
+let fastSession = null;     // simpan session terakhir untuk polling
+let fastInFlight = false;   // cegah overlap request
+
+function upsertVehicleMarkerFast(session, code, lat, lng, status){
+  if (!map) return;
+
+  // update meta lokal agar drawer/statusBadge ikut update
+  const k = String(code || '').trim();
+  if (!k) return;
+
+  const prev = vehiclesByCode[k] || {};
+  vehiclesByCode[k] = {
+    ...prev,
+    code: k,
+    status: status || prev.status || 'on_the_way',
+    currentLocation: { lat, lng }
+  };
+
+  let marker = vehicleMarkers[k];
+  const label = `${k}${prev.type ? ` (${prev.type})` : ''} - ${vehiclesByCode[k].status || ''}`;
+
+  if (!marker){
+    marker = L.marker([lat, lng], {
+      icon: makeVehicleDivIcon(k, vehiclesByCode[k].status)
+    }).addTo(map);
+
+    // klik marker -> drawer (manifest on-demand)
+    marker.on('click', ()=> openDrawer(k, session));
+
+    marker.bindPopup(label);
+    vehicleMarkers[k] = marker;
+  } else {
+    marker.setLatLng([lat, lng]);
+    updateMarkerIcon(marker, k, vehiclesByCode[k].status);
+
+    const p = marker.getPopup();
+    if (p) p.setContent(label);
+  }
+}
+
+async function refreshMarkersFast(){
+  // hanya online, karena endpoint fast dari cache server
+  if (!navigator.onLine) return;
+  if (!fastSession?.sessionId) return;
+  if (!map) return;
+  if (fastInFlight) return;
+
+  // daftar codes supaya payload kecil (ambil dari meta yang sudah ada)
+  const codes = Object.keys(vehiclesByCode || {});
+  if (!codes.length) return;
+
+  fastInFlight = true;
+  try{
+    const res = await api.mapFast(fastSession.sessionId, codes, 250);
+    if (!res || !res.success) return;
+
+    const list = res.vehicles || [];
+    for (const v of list){
+      const lat = Number(v.lat);
+      const lng = Number(v.lng);
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
+      upsertVehicleMarkerFast(fastSession, v.code, lat, lng, v.status);
+    }
+
+    // optional: update UI last update
+    // lastUpd.textContent = new Date(res.now).toLocaleTimeString('id-ID');
+  } catch(e){
+    // diamkan agar tidak spam notifikasi
+  } finally {
+    fastInFlight = false;
+  }
+}
+
+function startFastPolling(session){
+  fastSession = session || null;
+
+  if (fastTimer) clearInterval(fastTimer);
+
+  // pause ketika tab tidak terlihat (hemat baterai & request)
+  // (tetap aman kalau tidak dipakai)
+  const tick = () => refreshMarkersFast().catch(()=>{});
+
+  fastTimer = setInterval(tick, MAP_FAST_MS);
+
+  // initial hit
+  tick();
+}
+
+function stopFastPolling(){
+  if (fastTimer) clearInterval(fastTimer);
+  fastTimer = null;
+  fastSession = null;
+  fastInFlight = false;
+}
+
+// optional: auto pause/resume saat tab hide/show
+document.addEventListener('visibilitychange', ()=>{
+  if (document.hidden){
+    // stop total agar request berhenti
+    // (kalau ingin hanya pause tanpa reset session, bisa comment stopFastPolling)
+    if (fastTimer) clearInterval(fastTimer);
+    fastTimer = null;
+  } else {
+    // resume jika session masih ada
+    if (!fastTimer && fastSession?.sessionId){
+      fastTimer = setInterval(() => refreshMarkersFast().catch(()=>{}), MAP_FAST_MS);
+      refreshMarkersFast().catch(()=>{});
+    }
+  }
+});
+
 // haversine distance (meter)
 function haversineM(lat1,lng1,lat2,lng2){
   const R = 6371000;
@@ -551,6 +665,7 @@ export async function refreshMap(session, { includeManifest = 0, fitMode = 'none
       if (!v || !v.code) continue;
       vehiclesByCode[String(v.code)] = v;
     }
+    startFastPolling(session);
 
     // hanya update manifest cache kalau memang diminta
     if (includeManifest) {

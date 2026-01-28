@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard Kedatangan Peserta</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Font Awesome untuk ikon -->
+     <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='64' height='64' viewBox='0 0 64 64'%3E%3Ctext y='50' x='10' font-size='56'%3E🛣️%3C/text%3E%3C/svg%3E" />
+    
+    <!-- Chart.js untuk grafik -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body class="bg-gray-50 text-gray-800">
+    <div class="container mx-auto px-4 py-8">
+        <!-- Header -->
+        <header class="mb-10">
+            <div class="flex flex-col md:flex-row justify-between items-start md:items-center mb-6">
+                <div>
+                    <h1 class="text-3xl md:text-4xl font-bold text-gray-900">
+                        <i class="fas fa-users text-blue-600 mr-3"></i>Dashboard Kedatangan Peserta
+                    </h1>
+                    <p class="text-gray-600 mt-2">
+                        Monitoring real-time kedatangan peserta
+                    </p>
+                </div>
+                <div class="mt-4 md:mt-0">
+                    <button id="refreshBtn" class="bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg flex items-center transition duration-200">
+                        <i class="fas fa-sync-alt mr-2"></i> Refresh Data
+                    </button>
+                </div>
+            </div>
+            
+            <!-- Info Last Updated -->
+            <div class="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                <div class="flex items-center">
+                    <i class="fas fa-database text-blue-600 text-lg mr-3"></i>
+                    <div>
+                        <p class="font-medium text-blue-800">Data Sumber: Server</p>
+                        <p class="text-sm text-blue-600 mt-1">Terakhir diperbarui: <span id="lastUpdated">Memuat...</span></p>
+                    </div>
+                </div>
+            </div>
+        </header>
+
+        <!-- Loading Indicator -->
+        <div id="loadingIndicator" class="fixed inset-0 bg-white bg-opacity-80 flex flex-col justify-center items-center z-50">
+            <div class="loader mb-4"></div>
+            <p class="text-gray-700 font-medium">Memuat data dari Server...</p>
+            <p class="text-gray-500 text-sm mt-2">Harap tunggu sebentar</p>
+        </div>
+
+        <!-- Summary Cards -->
+        <section class="mb-10">
+            <h2 class="text-2xl font-bold text-gray-800 mb-6 flex items-center">
+                <i class="fas fa-chart-line text-green-600 mr-3"></i> Ringkasan Statistik
+            </h2>
+            
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <!-- Total Peserta -->
+                <div class="bg-white rounded-xl shadow-lg p-6 card-hover border-t-4 border-blue-500">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <p class="text-gray-500 text-sm font-medium">Total Peserta</p>
+                            <p id="totalPeserta" class="text-4xl font-bold text-gray-800 mt-2 count-up">0</p>
+                        </div>
+                        <div class="bg-blue-100 p-4 rounded-full">
+                            <i class="fas fa-users text-blue-600 text-2xl"></i>
+                        </div>
+                    </div>
+                    <div class="mt-4">
+                        <div class="flex items-center text-gray-600 text-sm">
+                            <i class="fas fa-info-circle mr-2"></i>
+                            <span>Jumlah peserta berdasarkan data master</span>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Total Sudah Datang -->
+                <div class="bg-white rounded-xl shadow-lg p-6 card-hover border-t-4 border-green-500">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <p class="text-gray-500 text-sm font-medium">Sudah Datang</p>
+                            <p id="totalArrived" class="text-4xl font-bold text-gray-800 mt-2 count-up">0</p>
+                        </div>
+                        <div class="bg-green-100 p-4 rounded-full">
+                            <i class="fas fa-check-circle text-green-600 text-2xl"></i>
+                        </div>
+                    </div>
+                    <div class="mt-4">
+                        <div class="flex items-center text-gray-600 text-sm">
+                            <i class="fas fa-clock mr-2"></i>
+                            <span>Berdasarkan data arrivals terbaru</span>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Persentase Kedatangan -->
+                <div class="bg-white rounded-xl shadow-lg p-6 card-hover border-t-4 border-purple-500">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <p class="text-gray-500 text-sm font-medium">Persentase Kedatangan</p>
+                            <p id="arrivalPercentage" class="text-4xl font-bold text-gray-800 mt-2 count-up">0%</p>
+                        </div>
+                        <div class="bg-purple-100 p-4 rounded-full">
+                            <i class="fas fa-chart-pie text-purple-600 text-2xl"></i>
+                        </div>
+                    </div>
+                    <div class="mt-6">
+                        <div class="w-full bg-gray-200 rounded-full h-3">
+                            <div id="arrivalProgressBar" class="bg-gradient-to-r from-purple-500 to-purple-700 h-3 rounded-full progress-bar" style="width: 0%"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Charts & Detailed Stats -->
+        <section class="mb-10">
+            <h2 class="text-2xl font-bold text-gray-800 mb-6 flex items-center">
+                <i class="fas fa-chart-bar text-orange-600 mr-3"></i> Statistik Detail
+            </h2>
+            
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                <!-- Per Region -->
+                <div class="bg-white rounded-xl shadow-lg p-6">
+                    <h3 class="text-xl font-bold text-gray-800 mb-4 flex items-center">
+                        <i class="fas fa-globe-asia text-blue-500 mr-2"></i> Kedatangan per Region
+                    </h3>
+                    <div class="table-container">
+                        <table class="w-full text-sm text-left text-gray-700 whitespace-nowrap">
+                            <thead class="text-xs text-gray-700 uppercase bg-gray-100">
+                                <tr>
+                                    <th class="py-3 px-4">Region</th>
+                                    <th class="py-3 px-4">Total</th>
+                                    <th class="py-3 px-4">Sudah Datang</th>
+                                    <th class="py-3 px-4">Persentase</th>
+                                    <th class="py-3 px-4">Progress</th>
+                                </tr>
+                            </thead>
+                            <tbody id="regionTableBody" class="bg-white">
+                                <!-- Data akan diisi oleh JavaScript -->
+                                <tr>
+                                    <td colspan="5" class="py-8 text-center text-gray-500">
+                                        <i class="fas fa-spinner fa-spin mr-2"></i> Memuat data region...
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+                
+                <!-- Per Unit/Estate -->
+                <div class="bg-white rounded-xl shadow-lg p-6">
+                    <h3 class="text-xl font-bold text-gray-800 mb-4 flex items-center">
+                        <i class="fas fa-building text-green-500 mr-2"></i> Kedatangan per Unit
+                    </h3>
+                    <div class="table-container max-h-96 overflow-y-auto">
+                        <table class="w-full text-sm text-left text-gray-700 whitespace-nowrap">
+                            <thead class="text-xs text-gray-700 uppercase bg-gray-100 sticky top-0">
+                                <tr>
+                                    <th class="py-3 px-4">Estate/Unit</th>
+                                    <th class="py-3 px-4">Region</th>
+                                    <th class="py-3 px-4">Total</th>
+                                    <th class="py-3 px-4">Sudah Datang</th>
+                                    <th class="py-3 px-4">Persentase</th>
+                                </tr>
+                            </thead>
+                            <tbody id="estateTableBody" class="bg-white">
+                                <!-- Data akan diisi oleh JavaScript -->
+                                <tr>
+                                    <td colspan="5" class="py-8 text-center text-gray-500">
+                                        <i class="fas fa-spinner fa-spin mr-2"></i> Memuat data unit...
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Participant Details -->
+        <section class="mb-10">
+            <div class="flex flex-col md:flex-row justify-between items-start md:items-center mb-6">
+                <h2 class="text-2xl font-bold text-gray-800 flex items-center">
+                    <i class="fas fa-list-alt text-indigo-600 mr-3"></i> Detail Peserta
+                </h2>
+                
+                <!-- Tab Navigation -->
+                <div class="flex space-x-2 mt-4 md:mt-0">
+                    <button id="tabArrived" class="tab-btn active bg-green-600 text-white px-4 py-2 rounded-lg font-medium transition duration-200">
+                        <i class="fas fa-check-circle mr-2"></i> Sudah Datang
+                    </button>
+                    <button id="tabNotArrived" class="tab-btn bg-red-600 text-white px-4 py-2 rounded-lg font-medium transition duration-200">
+                        <i class="fas fa-clock mr-2"></i> Belum Datang
+                    </button>
+                </div>
+            </div>
+            
+            <!-- Search and Filter -->
+            <div class="mb-6 bg-white rounded-lg shadow p-4">
+                <div class="flex flex-col md:flex-row md:items-center md:justify-between">
+                    <div class="mb-4 md:mb-0">
+                        <div class="relative">
+                            <i class="fas fa-search absolute left-3 top-3 text-gray-400"></i>
+                            <input type="text" id="searchInput" placeholder="Cari berdasarkan NIK, Nama, Region, atau Estate..." 
+                                   class="pl-10 pr-4 py-2 border border-gray-300 rounded-lg w-full md:w-80 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                        </div>
+                    </div>
+                    <div class="flex items-center">
+                        <span class="text-gray-600 mr-3 text-sm">Filter:</span>
+                        <select id="filterRegion" class="border border-gray-300 rounded-lg px-3 py-2 mr-2 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            <option value="">Semua Region</option>
+                            <!-- Region options akan diisi oleh JavaScript -->
+                        </select>
+                        <select id="filterEstate" class="border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            <option value="">Semua Estate/Unit</option>
+                            <!-- Estate options akan diisi oleh JavaScript -->
+                        </select>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Tables Container -->
+            <div class="bg-white rounded-xl shadow-lg overflow-hidden">
+                <!-- Arrived Participants Table -->
+                <div id="arrivedTable" class="table-container">
+                    <table class="w-full text-sm text-left text-gray-700 whitespace-nowrap">
+                        <thead class="text-xs text-gray-700 uppercase bg-gray-100">
+                            <tr>
+                                <th class="py-3 px-4">NIK</th>
+                                <th class="py-3 px-4">Nama</th>
+                                <th class="py-3 px-4">Region</th>
+                                <th class="py-3 px-4">Estate</th>
+                                <th class="py-3 px-4">Kendaraan</th>
+                                <th class="py-3 px-4">Waktu Kedatangan</th>
+                                <th class="py-3 px-4">Trip ID</th>
+                                <th class="py-3 px-4">Status</th>
+                            </tr>
+                        </thead>
+                        <tbody id="arrivedTableBody">
+                            <!-- Data akan diisi oleh JavaScript -->
+                            <tr>
+                                <td colspan="8" class="py-10 text-center text-gray-500">
+                                    <div class="flex flex-col items-center">
+                                        <i class="fas fa-spinner fa-spin text-2xl mb-3"></i>
+                                        <p>Memuat data peserta yang sudah datang...</p>
+                                    </div>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+                
+                <!-- Not Arrived Participants Table (hidden by default) -->
+                <div id="notArrivedTable" class="table-container hidden">
+                    <table class="w-full text-sm text-left text-gray-700 whitespace-nowrap">
+                        <thead class="text-xs text-gray-700 uppercase bg-gray-100">
+                            <tr>
+                                <th class="py-3 px-4">NIK</th>
+                                <th class="py-3 px-4">Nama</th>
+                                <th class="py-3 px-4">Region</th>
+                                <th class="py-3 px-4">Estate</th>
+                                <th class="py-3 px-4">Kendaraan</th>
+                                <th class="py-3 px-4">Main NIK</th>
+                                <th class="py-3 px-4">Trip ID</th>
+                                <th class="py-3 px-4">Status</th>
+                            </tr>
+                        </thead>
+                        <tbody id="notArrivedTableBody">
+                            <!-- Data akan diisi oleh JavaScript -->
+                            <tr>
+                                <td colspan="8" class="py-10 text-center text-gray-500">
+                                    <div class="flex flex-col items-center">
+                                        <i class="fas fa-spinner fa-spin text-2xl mb-3"></i>
+                                        <p>Memuat data peserta yang belum datang...</p>
+                                    </div>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+                
+                <!-- Table Info -->
+                <div class="bg-gray-50 border-t border-gray-200 px-6 py-3 text-sm text-gray-600">
+                    <div class="flex justify-between items-center">
+                        <div>
+                            <span id="tableInfo">Memuat data...</span>
+                        </div>
+                        <div class="flex items-center">
+                            <i class="fas fa-info-circle mr-2"></i>
+                            <span>Klik pada header untuk mengurutkan</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Footer -->
+        <footer class="mt-12 pt-8 border-t border-gray-200 text-center text-gray-600">
+            <div class="flex flex-col md:flex-row justify-between items-center">
+                <div class="mb-4 md:mb-0">
+                    <p class="font-medium">Dashboard Kedatangan Peserta</p>
+                    <p class="text-sm">Data sumber: Server - Real-Time</p>
+                </div>
+                <div class="flex items-center">
+                    <i class="fas fa-code text-gray-400 mr-2"></i>
+                    <p class="text-sm">Karyamas Plantation 1</p>
+                </div>
+            </div>
+        </footer>
+    </div>
+
+    <!-- JavaScript -->
+    <script src="script.js"></script>
+</body>
+</html>

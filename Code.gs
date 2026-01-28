@@ -370,7 +370,7 @@ function uniq_(arr){
 }
 
 function splitCsv_(s){
-  return String(s||'').split(',').map(x=>x.trim()).filter(Boolean);
+  return String(s||'').split(';').map(x=>x.trim()).filter(Boolean);
 }
 
 function joinCsv_(arr){
@@ -902,7 +902,7 @@ function assignToVehicle(params){
 
   let nikList = [];
   if (params.nikList){
-    try{ nikList = JSON.parse(params.nikList); }catch{ nikList = String(params.nikList).split(',').map(s=>s.trim()); }
+    try{ nikList = JSON.parse(params.nikList); }catch{ nikList = String(params.nikList).split(';').map(s=>s.trim()); }
   }
   nikList = (nikList||[]).map(String).filter(Boolean);
   if (!nikList.length) return { success:false, message:'NIK list kosong' };
@@ -917,7 +917,7 @@ function assignToVehicle(params){
 
   const capacity = Number(vSheet.getRange(vFound.row, capCol).getValue() || 0);
   const currentPassengers = String(vSheet.getRange(vFound.row, passCol).getValue()||'')
-    .split(',').map(s=>s.trim()).filter(Boolean);
+    .split(';').map(s=>s.trim()).filter(Boolean);
 
   const merged = Array.from(new Set([...currentPassengers, ...nikList]));
   if (capacity && merged.length > capacity) return { success:false, message:'Kapasitas kendaraan penuh' };
@@ -958,7 +958,7 @@ function confirmArrival(params){
 
   const tripId = String(params.tripId||'').trim();
   let nikList = [];
-  try{ nikList = JSON.parse(params.nikList||'[]'); }catch{ nikList = String(params.nikList||'').split(','); }
+  try{ nikList = JSON.parse(params.nikList||'[]'); }catch{ nikList = String(params.nikList||'').split(';'); }
   nikList = (nikList||[]).map(s=>String(s).trim()).filter(Boolean);
   if (!nikList.length) return { success:false, message:'NIK list kosong' };
 
@@ -1019,7 +1019,7 @@ function updateVehicleArrivalStatus(nik, tripId){
 
   for (let i=1;i<values.length;i++){
     if (tripId && tripIdx>-1 && String(values[i][tripIdx]) !== tripId) continue;
-    const passengers = String(values[i][passIdx]||'').split(',').map(s=>s.trim()).filter(Boolean);
+    const passengers = String(values[i][passIdx]||'').split(';').map(s=>s.trim()).filter(Boolean);
     if (passengers.indexOf(String(nik)) === -1) continue;
     if (checkAllPassengersArrived(passengers, tripId)){
       vSheet.getRange(i+1, stIdx+1).setValue('arrived');
@@ -1557,7 +1557,7 @@ function assignVehicleStrict(params){
   // nikList wajib
   let nikList = [];
   try{ nikList = JSON.parse(params.nikList||'[]'); }
-  catch{ nikList = String(params.nikList||'').split(','); }
+  catch{ nikList = String(params.nikList||'').split(';'); }
   nikList = uniq_(nikList);
   if (!nikList.length) return { success:false, message:'NIK list kosong' };
 
@@ -1679,5 +1679,85 @@ function assignVehicleStrict(params){
       totalPassengers: currentPassengers.length
     };
   });
+}
+
+/***********************
+ * AUTO PURGE @ 01:00–02:00
+ * Archive -> History (DataType | ArchivedDate | Data)
+ * Then delete all rows in: Sessions; Arrivals; Participants; Vehicles
+ ***********************/
+
+function installDailyPurgeTrigger_0100(){
+  // hapus trigger lama agar tidak dobel
+  const triggers = ScriptApp.getProjectTriggers();
+  triggers.forEach(t => {
+    if (t.getHandlerFunction() === 'autoPurge_0100') ScriptApp.deleteTrigger(t);
+  });
+
+  // pasang trigger harian jam 01:00 (akan dieksekusi sekitar 01:00–02:00)
+  ScriptApp.newTrigger('autoPurge_0100')
+    .timeBased()
+    .everyDays(1)
+    .atHour(1)
+    .create();
+}
+
+function autoPurge_0100(){
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(25000)) return;
+
+  try{
+    // pastikan History ada + header benar
+    ensureHeader(sh(CONFIG.SHEETS.HISTORY), ['DataType','ArchivedDate','Data']);
+
+    // archive + clear
+    archiveAndClearSheet_(CONFIG.SHEETS.SESSIONS,    'SESSION');
+    archiveAndClearSheet_(CONFIG.SHEETS.ARRIVALS,    'ARRIVAL');
+    archiveAndClearSheet_(CONFIG.SHEETS.PARTICIPANTS,'PARTICIPANT');
+    archiveAndClearSheet_(CONFIG.SHEETS.VEHICLES,    'VEHICLE');
+
+    // optional: catat log ke Logger
+    console.log('autoPurge_0100 done at ' + new Date().toISOString());
+
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/**
+ * Arsipkan semua baris data (mulai row 2) ke History sebagai JSON per baris,
+ * lalu hapus semua data di sheet asal (row 2 dst), header tetap.
+ */
+function archiveAndClearSheet_(sheetName, dataType){
+  const src = sh(sheetName);
+  const history = sh(CONFIG.SHEETS.HISTORY);
+
+  const lastRow = src.getLastRow();
+  const lastCol = src.getLastColumn();
+  if (lastRow <= 1 || lastCol <= 0) return; // tidak ada data
+
+  const headers = src.getRange(1,1,1,lastCol).getValues()[0].map(h => String(h||'').trim());
+
+  const values = src.getRange(2,1,lastRow-1,lastCol).getValues();
+  if (!values.length) return;
+
+  const now = new Date();
+
+  // buat payload history: [DataType, ArchivedDate, DataJson]
+  const out = values.map(row => {
+    const obj = {};
+    for (let c=0;c<headers.length;c++){
+      const key = headers[c] || ('COL_' + (c+1));
+      obj[key] = row[c];
+    }
+    return [String(dataType), now, JSON.stringify(obj)];
+  });
+
+  // append bulk ke History
+  const startRow = history.getLastRow() + 1;
+  history.getRange(startRow, 1, out.length, 3).setValues(out);
+
+  // hapus data sumber (row2 dst), header tetap
+  src.getRange(2, 1, lastRow-1, lastCol).clearContent();
 }
 

@@ -11,10 +11,94 @@ let selectedNiks = new Set();
 
 export function getPendingVehicle(){ return pendingVehicle; }
 
+// ============================
+// OFFLINE MASTER INDICATOR (Scan Page)
+// - tampil jika: offline + master cache belum ada
+// ============================
+export async function updateScanOfflineHint(session){
+  const el = document.getElementById('scanOfflineHint');
+  const titleEl = document.getElementById('scanOfflineHintTitle');
+  const msgEl = document.getElementById('scanOfflineHintMsg');
+  if (!el || !titleEl || !msgEl) return;
+
+  // ONLINE => hide
+  if (navigator.onLine !== false){
+    el.classList.add('hidden');
+    return;
+  }
+
+  // OFFLINE => cek master
+  const ok = await hasOfflineMasterForScan(session).catch(()=>false);
+
+  el.classList.remove('hidden');
+
+  if (ok){
+    // ✅ OFFLINE OK (GREEN)
+    el.classList.remove('border-amber-300/60','bg-amber-50','text-amber-900');
+    el.classList.add('border-emerald-300/70','bg-emerald-50','text-emerald-900');
+
+    titleEl.textContent = 'Offline OK';
+    msgEl.innerHTML = 'Data master tersedia. Anda bisa <b>scan</b>, <b>cari peserta</b>, dan <b>submit</b> (akan masuk antrian sinkronisasi).';
+  } else {
+    // ⚠️ OFFLINE BUTUH SYNC (AMBER)
+    el.classList.remove('border-emerald-300/70','bg-emerald-50','text-emerald-900');
+    el.classList.add('border-amber-300/60','bg-amber-50','text-amber-900');
+
+    titleEl.textContent = 'Mode Offline';
+    msgEl.innerHTML = 'Data master belum ada. Silakan <b>online sekali</b> untuk sinkron awal (download master), lalu Scan dapat dipakai offline.';
+  }
+}
+
+async function hasOfflineMasterForScan(session){
+  if (!session?.sessionId) return false;
+
+  const tripId = session.activeTripId || '';
+  const coordinatorNik = session.userId || session.user?.nik || session.user?.NIK || '';
+
+  const r = await api.apiCall('getScanCandidates', {
+    sessionId: session.sessionId,
+    coordinatorNik,
+    tripId,
+    q: '',
+    limit: 5
+  });
+
+  // kalau fallback offline sukses dan ada data minimal => master tersedia
+  const hasAny =
+    !!(r && r.success) &&
+    (
+      (Array.isArray(r.affiliated) && r.affiliated.length > 0) ||
+      (Array.isArray(r.participants) && r.participants.length > 0) ||
+      (Array.isArray(r.vehicles) && r.vehicles.length > 0)
+    );
+
+  return !!hasAny;
+}
+
+// refresh indikator ketika koneksi berubah (tanpa spam)
+(function bindOfflineIndicatorAuto(){
+  window.addEventListener('online', ()=>{
+    try{
+      const el = document.getElementById('scanOfflineHint');
+      if (el) el.classList.add('hidden');
+    }catch{}
+  });
+
+  window.addEventListener('offline', ()=>{
+    // indikator akan diperbarui saat user membuka Scan / memulai scan
+    // tapi bisa juga langsung tampil (soft):
+    try{
+      const el = document.getElementById('scanOfflineHint');
+      if (el) el.classList.remove('hidden');
+    }catch{}
+  });
+})();
+
 export async function startScanning(session){
   const btn = $('#startScanBtn');
   try{
     setButtonLoading(btn, true);
+    try{ await updateScanOfflineHint(session); }catch{}
     if (!window.Html5Qrcode) throw new Error('Library html5-qrcode belum loaded');
 
     const box = document.getElementById('scannerBox');
@@ -46,36 +130,61 @@ export async function stopScanning(){
 export async function manualSubmit(session){
   const code = $('#vehicleCodeInput')?.value.trim();
   if (!code) return showNotification('Masukkan kode kendaraan', 'error');
+
+  // ✅ tampilkan hint jika offline & master belum ada
+  try{ await updateScanOfflineHint(session); }catch{}
+
   return handleCode(session, code);
 }
 
 async function handleCode(session, codeOrBarcode){
-  let res;
+  const tripId = session.activeTripId || '';
+  const q = String(codeOrBarcode || '').trim();
+
+  let v = null;
+
+  // 1) Coba API getVehicles (online normal)
   try{
-    res = await api.apiCall('getVehicles', {
+    const res = await api.apiCall('getVehicles', {
       sessionId: session.sessionId,
-      q: codeOrBarcode,
-      tripId: session.activeTripId || ''
+      q,
+      tripId
     });
+    v = res?.vehicle || null;
   }catch(e){
-    // ini biar pesannya lebih jelas kalau offline
-    if (navigator.onLine === false){
-      throw new Error('Mode offline: kendaraan tidak ditemukan. Pastikan sudah pernah login online pertamakali.');
+    // 2) Jika gagal (umumnya karena offline), fallback ke getScanCandidates(q)
+    try{
+      const res2 = await api.apiCall('getScanCandidates', {
+        sessionId: session.sessionId,
+        coordinatorNik: session.userId || session.user?.nik || session.user?.NIK || '',
+        tripId,
+        q,
+        limit: 80
+      });
+
+      // offline fallback getScanCandidates akan mengembalikan vehicle jika q cocok Code/Barcode
+      if (res2?.success && res2?.vehicle){
+        v = res2.vehicle;
+      }
+    }catch(_e2){
+      // biarkan lanjut ke error handling bawah
     }
-    throw e;
+
+    // kalau tetap tidak ketemu, lempar error awal
+    if (!v) throw e;
   }
 
-  const v = res.vehicle;
   if (!v) throw new Error('Kendaraan tidak ditemukan');
 
   pendingVehicle = v;
   selectedNiks = new Set();
   renderResult(v);
+  try{ await updateScanOfflineHint(session); }catch{}
 
   try{
     await loadCandidates(session);
   }catch(e){
-    showNotification(e.message || 'Gagal memuat kandidat', 'warning');
+    showNotification(e?.message || 'Gagal memuat kandidat (offline cache belum ada)', 'info', 3500);
   }
 }
 
@@ -143,6 +252,7 @@ function renderResult(v){
 let scanCandidates = { affiliated: [], search: [] };
 
 async function loadCandidates(session){
+  try{ await updateScanOfflineHint(session); }catch{}
   const tripId = session.activeTripId || '';
   const res = await api.apiCall('getScanCandidates', {
     sessionId: session.sessionId,

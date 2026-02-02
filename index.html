@@ -236,9 +236,15 @@
             <!-- Scan Page -->
             <div id="scanPage" class="content-page" style="display:none;">
                 <h1 class="page-title">Scan Kendaraan</h1>
+                <!-- OFFLINE STATUS (Scan Page) -->
+                <div id="scanOfflineHint"
+                    class="hidden mb-3 rounded-xl border px-4 py-3 text-sm leading-relaxed">
+                <div class="font-extrabold mb-1" id="scanOfflineHintTitle">Mode Offline</div>
+                <div id="scanOfflineHintMsg">...</div>
+                </div>
                 <div class="scan-container">
                     <div class="scan-info">
-                        <p>Pindai barcode kendaraan untuk mendaftarkan diri dan keluarga Anda ke dalam kendaraan tersebut.</p>
+                        <p>Pindai QRCode kendaraan.</p>
                         <div class="current-user-info">
                             <h4>Anda:</h4>
                             <p id="currentUserInfo">Loading...</p>
@@ -248,7 +254,7 @@
                     <div class="scan-area">
                         <div class="scanner-box" id="scannerBox">
                             <i class="fas fa-qrcode"></i>
-                            <p>Arahkan kamera ke barcode kendaraan</p>
+                            <p>Arahkan kamera ke QRCode</p>
                             <button id="startScanBtn" class="btn-primary" onclick="startScanning()">
                                 <span class="btn-text">Mulai Scan</span>
                                 <span class="btn-spinner" style="display:none;">
@@ -258,7 +264,7 @@
                         </div>
                         
                         <div class="manual-input">
-                            <h4>Atau masukkan kode manual:</h4>
+                            <h4>Atau gunakan kode manual:</h4>
                             <input type="text" id="vehicleCodeInput" placeholder="Kode kendaraan (ex: KMP1-A01)">
                             <button id="manualSubmitBtn" class="btn-secondary" onclick="manualVehicleSubmit()">
                                 <span class="btn-text">Submit</span>
@@ -284,7 +290,7 @@
 
             <!-- Map Page -->
             <div id="mapPage" class="content-page" style="display:none;">
-                <h1 class="page-title">Pemantauan Perjalanan Real-time</h1>
+                <h1 class="page-title">Live Map Real-time</h1>
                  <!-- ✅ Tracking Otomatis (tanpa tombol) -->
                     <div id="trackBar" class="map-trackbar" style="display:none;">
                     <!-- tetap disediakan elemen select agar kompatibel, tapi disembunyikan -->
@@ -300,7 +306,7 @@
                         font-weight:800;
                         color:#333;
                     ">
-                        Tracking otomatis akan aktif saat halaman ini dibuka.
+                        Tracking otomatis.
                     </div>
                     </div>
                 <div class="map-container">
@@ -344,7 +350,7 @@
                     <div class="arrival-info">
                         <div class="info-box">
                             <i class="fas fa-info-circle"></i>
-                            <p id="arrivalInfoText">Konfirmasi kedatangan Anda setelah tiba di lokasi kegiatan.</p>
+                            <p id="arrivalInfoText">Konfirmasi kedatangan setelah tiba.</p>
                         </div>
                         
                         <div class="user-arrival-status">
@@ -367,7 +373,7 @@
                                     <i class="fas fa-spinner fa-spin"></i>
                                 </span>
                             </button>
-                            <p class="action-note">Pastikan Anda sudah berada di lokasi Family Gathering sebelum mengkonfirmasi.</p>
+                            <p class="action-note">Pastikan Anda sudah di lokasi.</p>
                         </div>
                     </div>
                     
@@ -529,7 +535,7 @@
                         <!-- History Tab -->
                         <div id="adminHistoryTab" class="admin-tab-content">
                             <h3>Riwayat Data</h3>
-                            <p>Data yang berusia lebih dari 2 hari akan dipindahkan ke sini secara otomatis.</p>
+                            <p>Data yang lebih dari 2 hari pindah ke Riwayat.</p>
                             <div class="admin-table-container">
                                 <table class="admin-table">
                                     <thead>

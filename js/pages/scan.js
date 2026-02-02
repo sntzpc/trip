@@ -467,6 +467,11 @@ export async function confirmAssignment(session){
       startBackgroundTrackingPublic(session, vehicleCode);
     }catch{}
 
+    // ✅ beri tahu app.js untuk membuka menu lain
+    try{
+      window.dispatchEvent(new CustomEvent('tt_trip_started', { detail:{ vehicleCode } }));
+    }catch{}
+
     // ✅ setelah sukses: tetap tutup seperti sebelumnya
     $('#scanResult').style.display = 'none';
     pendingVehicle = null;

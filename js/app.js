@@ -10,7 +10,7 @@ import { loadParticipants, searchAndRender } from './pages/participants.js';
 import { renderSyncPage } from './pages/sync.js';
 import { initAdminEnhancements, showTab, loadUsers, loadVehicles, loadParticipantsAdmin, loadConfigAndTrips, saveConfig, upsertTrip, upsertUser, upsertVehicle, upsertParticipant } from './pages/admin.js';
 
-const State = {  session: null,  user: null,  cfg: null,  mapTimer: null};
+const State = {  session: null,  user: null,  cfg: null,  mapTimer: null,  tripLocked: false,  assignedVehicleCode: ""};
 
 let syncTimer = null;
 
@@ -39,6 +39,13 @@ document.addEventListener('DOMContentLoaded', async ()=>{
   ensureSidebarOverlay();
   hideLoadingSoon();
   bindLoginEnter();
+
+  // ✅ unlock menu setelah submit keberangkatan dari halaman scan
+  window.addEventListener('tt_trip_started', (ev)=>{
+    const code = ev?.detail?.vehicleCode || '';
+    setTripLocked(false, code);
+    try{ window.showDashboard?.(); }catch{}
+  });
 
   // Load cfg from cache first
   const cached = loadCfg();
@@ -93,6 +100,76 @@ function ensureSidebarOverlay(){
   document.body.appendChild(ov);
 }
 
+// ============================
+// PRE-DEPARTURE MENU GATING
+// ============================
+function setTripLocked(locked, vehicleCode=''){
+  State.tripLocked = !!locked;
+  State.assignedVehicleCode = String(vehicleCode||'').trim();
+  updateTripLockUI();
+}
+
+function updateTripLockUI(){
+  const locked = !!State.tripLocked;
+  // hide semua menu kecuali "Scan Kendaraan" (index 1)
+  const items = Array.from(document.querySelectorAll('.sidebar .menu-item'));
+  items.forEach((a, idx)=>{
+    // dashboard=0, scan=1, map=2, arrival=3, participants=4, sync=5, admin=6 (jika ada)
+    const isScan = (idx===1);
+    // Admin tetap hidden sesuai role; jangan diubah kalau locked/unlocked
+    if (a.id === 'adminMenu') return;
+    a.style.display = (locked && !isScan) ? 'none' : 'flex';
+  });
+
+  // header info
+  const sub = document.getElementById('sidebarEventSub');
+  if (sub){
+    if (locked){
+      sub.textContent = 'Silakan scan kendaraan & submit keberangkatan';
+    } else {
+      // jangan overwrite jika ada info event/trip lain
+      // (biarkan fungsi lain yang set)
+    }
+  }
+
+  // Kalau locked, paksa pindah ke halaman scan
+  if (locked){
+    try{ window.showScan?.(); }catch{}
+  }
+}
+
+async function refreshTripLockFromServer(){
+  if (!State.session) return;
+  const tripId = State.session.activeTripId || '';
+  const nik = State.session.userId || State.user?.nik || State.user?.NIK || '';
+  if (!tripId || !nik) return;
+
+  try{
+    const r = await api.apiCall('getMyVehicle', { sessionId: State.session.sessionId, tripId, nik });
+    if (r?.success && r?.found && r?.vehicle?.code){
+      setTripLocked(false, r.vehicle.code);
+    } else {
+      setTripLocked(true, '');
+    }
+  }catch{
+    // jika offline / error, fallback ke last vehicle code (lebih baik daripada membuka semua menu)
+    const last = String(localStorage.getItem('tt_last_vehicle_code') || '').trim();
+    setTripLocked(!last, last);
+  }
+}
+
+function guardTripReady(){
+  if (!State.session) return true;
+  if ((State.session.role||'')==='admin') return true; // admin tidak dikunci
+  if (!State.tripLocked) return true;
+
+  showNotification('Sebelum akses menu lain, silakan scan kendaraan & submit keberangkatan dulu.', 'info', 4500);
+  try{ window.showScan?.(); }catch{}
+  return false;
+}
+
+
+
 async function afterLoginInit(){
   // Load user data
   const res = await api.apiCall('getUserData', { sessionId: State.session.sessionId, nik: State.session.userId });
@@ -121,6 +198,9 @@ async function afterLoginInit(){
   }
 
   renderFamily(State.user);
+
+  // ✅ Lock menu sebelum submit keberangkatan (user role)
+  try{ await refreshTripLockFromServer(); }catch{}
   $('#userName').textContent = (State.user.name || State.user.Nama || '').toUpperCase();
   $('#currentUserInfo').textContent = `${State.user.name || State.user.Nama} - ${State.user.nik || State.user.NIK}`;
 
@@ -288,6 +368,7 @@ function showAutoSyncPrompt(session, sum){
 
 // ===== Page Navigation =====
 window.showSync = async (menuEl)=>{
+  if (!guardTripReady()) return;
   activateMenu(menuEl || (document.querySelectorAll('.menu-item')[5]||null));
   showPage('syncPage');
   closeSidebarOnMobile();
@@ -432,6 +513,9 @@ window.login = async () => {
     $('#userName').textContent = (State.user.name||'').toUpperCase();
     $('#currentUserInfo').textContent = `${State.user.name} - ${State.user.nik} (${State.user.estate||''})`;
     renderFamily(State.user);
+
+  // ✅ Lock menu sebelum submit keberangkatan (user role)
+  try{ await refreshTripLockFromServer(); }catch{}
     await showDashboard();
   } catch {}
 };
@@ -447,6 +531,7 @@ window.logout = async () => {
 
 window.showDashboard = showDashboard;
 async function showDashboard(){
+  if (!guardTripReady()) return;
   activateMenu(document.querySelector('.menu-item'));
   showPage('dashboardPage');
   closeSidebarOnMobile();
@@ -461,6 +546,7 @@ window.showScan = async ()=>{
 };
 
 window.showMap = async ()=>{
+  if (!guardTripReady()) return;
   activateMenu(document.querySelectorAll('.menu-item')[2]);
   showPage('mapPage');
   closeSidebarOnMobile();
@@ -506,6 +592,7 @@ window.showMap = async ()=>{
 };
 
 window.showArrival = async ()=>{
+  if (!guardTripReady()) return;
   activateMenu(document.querySelectorAll('.menu-item')[3]);
   showPage('arrivalPage');
   closeSidebarOnMobile();
@@ -517,6 +604,7 @@ window.showArrival = async ()=>{
 };
 
 window.showParticipants = async ()=>{
+  if (!guardTripReady()) return;
   activateMenu(document.querySelectorAll('.menu-item')[4]);
   showPage('participantsPage');
   closeSidebarOnMobile();

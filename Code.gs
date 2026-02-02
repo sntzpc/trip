@@ -59,6 +59,9 @@ function handleRequest(e){
       case 'getVehicles':
         result = getVehicles(params);
         break;
+      case 'getMyVehicle':
+        result = getMyVehicle(params);
+        break;
       case 'updateLocation':
         result = updateVehicleLocation(params);
         break;
@@ -788,6 +791,38 @@ function getVehicles(params){
   }
   return { success:true, vehicle, vehicles: q ? undefined : vehicles };
 }
+
+
+// Cari kendaraan yang berisi NIK tertentu pada TripId aktif (untuk gating menu sebelum keberangkatan)
+function getMyVehicle(params){
+  const userId = validateSession(params.sessionId);
+  if (!userId) return { success:false, message:'Session expired' };
+  const tripId = String(params.tripId||'').trim();
+  const nik = String(params.nik||'').trim();
+  if (!tripId) return { success:false, message:'tripId kosong' };
+  if (!nik) return { success:false, message:'nik kosong' };
+
+  const vehicles = toObjects(sh(CONFIG.SHEETS.VEHICLES))
+    .filter(v => String(v.TripId||'') === tripId);
+
+  // kolom penumpang umumnya "Passengers" (string), berisi daftar NIK dipisah ; atau ,
+  const findInPassengers = (s)=>{
+    const raw = String(s||'').trim();
+    if (!raw) return false;
+    const parts = raw.split(/[^0-9A-Za-z]+/).filter(Boolean).map(x=>String(x).trim());
+    return parts.includes(nik);
+  };
+
+  let vehicle = vehicles.find(v => findInPassengers(v.Passengers));
+  // fallback: jika ada kolom MainNik / DriverNik / PIC (beberapa versi sheet berbeda)
+  if (!vehicle){
+    vehicle = vehicles.find(v => String(v.MainNik||v.DriverNik||v.PIC||'').trim() === nik);
+  }
+
+  if (!vehicle) return { success:true, found:false, vehicle:null };
+  return { success:true, found:true, vehicle:{ code: vehicle.Code, type: vehicle.Type, status: vehicle.Status } };
+}
+
 
 function updateVehicleLocation(params){
   const userId = validateSession(params.sessionId);

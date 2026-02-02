@@ -103,36 +103,60 @@ function ensureSidebarOverlay(){
 // ============================
 // PRE-DEPARTURE MENU GATING
 // ============================
+function _isAdmin(){
+  const r = String(State.session?.role || State.user?.role || '').toLowerCase();
+  return r === 'admin';
+}
+
 function setTripLocked(locked, vehicleCode=''){
+  // ✅ admin tidak pernah dikunci
+  if (_isAdmin()){
+    State.tripLocked = false;
+    State.assignedVehicleCode = String(vehicleCode||'').trim();
+    updateTripLockUI();
+    return;
+  }
+
   State.tripLocked = !!locked;
   State.assignedVehicleCode = String(vehicleCode||'').trim();
   updateTripLockUI();
 }
 
 function updateTripLockUI(){
+  // ✅ ADMIN: tampilkan semua menu, jangan hide apa pun
+  if (_isAdmin()){
+    const items = Array.from(document.querySelectorAll('.sidebar .menu-item'));
+    items.forEach((a)=>{
+      // tampilkan semua menu termasuk adminMenu
+      a.style.display = 'flex';
+    });
+    return;
+  }
+
+  // ⛔ USER: jika locked, hide semua menu kecuali Scan (index 1)
   const locked = !!State.tripLocked;
-  // hide semua menu kecuali "Scan Kendaraan" (index 1)
   const items = Array.from(document.querySelectorAll('.sidebar .menu-item'));
+
   items.forEach((a, idx)=>{
-    // dashboard=0, scan=1, map=2, arrival=3, participants=4, sync=5, admin=6 (jika ada)
-    const isScan = (idx===1);
-    // Admin tetap hidden sesuai role; jangan diubah kalau locked/unlocked
-    if (a.id === 'adminMenu') return;
+    // urutan asumsi Anda: dashboard=0, scan=1, map=2, arrival=3, participants=4, sync=5, admin=6
+    const isScan = (idx === 1);
+
+    // admin menu memang bukan untuk user; biarkan aturan role yang mengatur (tetap jangan tampilkan)
+    if (a.id === 'adminMenu') {
+      a.style.display = 'none';
+      return;
+    }
+
     a.style.display = (locked && !isScan) ? 'none' : 'flex';
   });
 
   // header info
   const sub = document.getElementById('sidebarEventSub');
-  if (sub){
-    if (locked){
-      sub.textContent = 'Silakan scan kendaraan & submit keberangkatan';
-    } else {
-      // jangan overwrite jika ada info event/trip lain
-      // (biarkan fungsi lain yang set)
-    }
+  if (sub && locked){
+    sub.textContent = 'Silakan scan kendaraan & submit keberangkatan';
   }
 
-  // Kalau locked, paksa pindah ke halaman scan
+  // kalau locked => paksa ke halaman scan
   if (locked){
     try{ window.showScan?.(); }catch{}
   }
@@ -140,34 +164,56 @@ function updateTripLockUI(){
 
 async function refreshTripLockFromServer(){
   if (!State.session) return;
+
+  // ✅ admin tidak perlu cek apa pun
+  if (_isAdmin()){
+    setTripLocked(false, String(localStorage.getItem('tt_last_vehicle_code')||'').trim());
+    return;
+  }
+
   const tripId = State.session.activeTripId || '';
   const nik = State.session.userId || State.user?.nik || State.user?.NIK || '';
-  if (!tripId || !nik) return;
+  if (!tripId || !nik) {
+    // jika info belum lengkap, default lock untuk user
+    setTripLocked(true, '');
+    return;
+  }
 
   try{
     const r = await api.apiCall('getMyVehicle', { sessionId: State.session.sessionId, tripId, nik });
+
     if (r?.success && r?.found && r?.vehicle?.code){
       setTripLocked(false, r.vehicle.code);
+      try{ localStorage.setItem('tt_last_vehicle_code', r.vehicle.code); }catch{}
     } else {
       setTripLocked(true, '');
     }
   }catch{
-    // jika offline / error, fallback ke last vehicle code (lebih baik daripada membuka semua menu)
+    // fallback offline/error: gunakan last vehicle code jika ada
     const last = String(localStorage.getItem('tt_last_vehicle_code') || '').trim();
     setTripLocked(!last, last);
   }
 }
 
 function guardTripReady(){
+  // ✅ admin bebas akses
+  if (_isAdmin()) return true;
+
+  // user belum login => biarkan
   if (!State.session) return true;
-  if ((State.session.role||'')==='admin') return true; // admin tidak dikunci
+
+  // user sudah unlock => boleh
   if (!State.tripLocked) return true;
 
-  showNotification('Sebelum akses menu lain, silakan scan kendaraan & submit keberangkatan dulu.', 'info', 4500);
+  // user locked => block
+  showNotification(
+    'Sebelum akses menu lain, silakan scan kendaraan & submit keberangkatan dulu.',
+    'info',
+    4500
+  );
   try{ window.showScan?.(); }catch{}
   return false;
 }
-
 
 
 async function afterLoginInit(){
@@ -181,7 +227,17 @@ async function afterLoginInit(){
   State.session.user = State.user;
 
   showMainApp();
-  await showDashboard();
+
+  // ✅ cek lock dulu (admin akan auto-unlock)
+  try{ await refreshTripLockFromServer(); }catch{}
+
+  // ✅ jika user masih locked => langsung ke Scan saja, dashboard jangan dibuka dulu
+  if (!_isAdmin() && State.tripLocked){
+    try{ await window.showScan?.(); }catch{}
+  } else {
+    await showDashboard();
+  }
+
 
     // ✅ auto resume tracking jika user sudah punya kendaraan terakhir
   try{
@@ -516,7 +572,12 @@ window.login = async () => {
 
   // ✅ Lock menu sebelum submit keberangkatan (user role)
   try{ await refreshTripLockFromServer(); }catch{}
+
+  if (!_isAdmin() && State.tripLocked){
+    try{ await window.showScan?.(); }catch{}
+  } else {
     await showDashboard();
+  }
   } catch {}
 };
 

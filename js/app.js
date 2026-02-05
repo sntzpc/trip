@@ -1,5 +1,6 @@
 import * as api from './core/api.js';
-import { loadSession, clearSession, loadCfg, saveCfg } from './core/storage.js';
+import { resetAllOfflineData } from './core/idb.js';
+import { LS, loadSession, saveSession, clearSession, loadCfg, saveCfg } from './core/storage.js';
 import { $, showNotification, activateMenu, showPage, toggleSidebar as _toggleSidebar, closeSidebarOnMobile } from './core/ui.js';
 import { doLogin, bindLoginEnter } from './pages/login.js';
 import { loadDashboard, showRegionDetailsUI, hideRegionDetailsUI } from './pages/dashboard.js';
@@ -8,7 +9,7 @@ import { startScanning, manualSubmit, confirmAssignment, getPendingVehicle } fro
 import { renderFamily, confirmArrival as doConfirmArrival, initArrivalPage  } from './pages/arrival.js';
 import { loadParticipants, searchAndRender } from './pages/participants.js';
 import { renderSyncPage } from './pages/sync.js';
-import { initAdminEnhancements, showTab, loadUsers, loadVehicles, loadParticipantsAdmin, loadConfigAndTrips, saveConfig, upsertTrip, upsertUser, upsertVehicle, upsertParticipant } from './pages/admin.js';
+import {initAdminEnhancements, showTab, loadUsers, loadVehicles, loadHistory, loadParticipantsAdmin, loadConfigAndTrips, saveConfig, upsertTrip, upsertUser, upsertVehicle, upsertParticipant} from './pages/admin.js';
 
 const State = {  session: null,  user: null,  cfg: null,  mapTimer: null,  tripLocked: false,  assignedVehicleCode: ""};
 
@@ -725,9 +726,14 @@ window.showAdmin = async ()=>{
   await loadVehicles(State.session);
   await loadConfigAndTrips(State.session);
   await loadParticipantsAdmin(State.session);
+  await loadHistory(State.session);
 };
 
-window.showAdminTab = (key)=> showTab(key);
+window.showAdminTab = async (key)=>{
+  showTab(key);
+  if (!State.session) return;
+  if (key === 'history') await loadHistory(State.session);
+};
 window.saveConfig = ()=> saveConfig(State.session);
 
 window.addNewTrip = ()=>{
@@ -868,11 +874,44 @@ setInterval(()=>{
 
 // tombol header: hard refresh
 window.hardRefresh = async () => {
+  // Tujuan:
+  // - Bersihkan data lokal (IndexedDB + localStorage) supaya data terbaru ditarik ulang
+  // - Pertahankan session yang masih aktif agar user tidak perlu login ulang
+
+  const now = Date.now();
+
+  // simpan session aktif (kalau masih berlaku)
+  let keepSession = null;
   try{
-    showNotification('Memuat ulang aplikasi...', 'info', 1200);
+    const s = loadSession();
+    if (s && s.expiry && Number(s.expiry) > now) keepSession = s;
   }catch{}
 
-  // 1) update service worker (kalau ada)
+  try{
+    showNotification('Refresh: bersihkan data lokal & tarik data terbaru…', 'info', 1600);
+  }catch{}
+
+  // 1) bersihkan IndexedDB (cache data + antrian sync)
+  try{
+    await resetAllOfflineData();
+  }catch{}
+
+  // 2) bersihkan localStorage kecuali session aktif (dan flag prefetch)
+  try{
+    const keys = Object.keys(localStorage);
+    for (const k of keys){
+      // biarkan session diset ulang di bawah
+      if (k === LS.session) continue;
+      localStorage.removeItem(k);
+    }
+    if (keepSession){
+      saveSession(keepSession);
+      // ✅ setelah reload, auto-prefetch data penting dari server
+      localStorage.setItem('tt_force_prefetch', '1');
+    }
+  }catch{}
+
+  // 3) update service worker (kalau ada)
   try{
     if ('serviceWorker' in navigator){
       const reg = await navigator.serviceWorker.getRegistration();
@@ -880,16 +919,15 @@ window.hardRefresh = async () => {
     }
   }catch{}
 
-  // 2) hapus cache shell (opsional, tapi ini yang membuat "hard refresh" benar-benar fresh)
+  // 4) hapus cache shell (opsional, membuat refresh benar-benar fresh)
   try{
     if ('caches' in window){
       const keys = await caches.keys();
-      // hapus semua cache yang diawali "trip_tracker_shell"
       await Promise.all(keys.map(k => k.startsWith('trip_tracker_shell') ? caches.delete(k) : null));
     }
   }catch{}
 
-  // 3) reload dengan cache-busting param
+  // 5) reload dengan cache-busting param
   try{
     const u = new URL(location.href);
     u.searchParams.set('_r', String(Date.now()));

@@ -8,6 +8,165 @@ let vehiclesByCode = {};
 let mapHasFittedOnce = false;
 let invalidatedOnce = false;
 
+// === Vehicle filter (Live Maps) ===
+let currentVehicleFilter = 'all'; // 'all' or vehicle code
+let lastVehiclesSnapshot = [];    // latest vehicles list for cards/options
+
+function getVehicleFilterEl(){ return document.getElementById('vehicleFilter'); }
+function getVehicleCardsEl(){ return document.getElementById('vehicleCards'); }
+
+function normalizeCode(code){ return String(code || '').trim(); }
+
+function ensureVehicleFilterOptions(vehicles){
+  const sel = getVehicleFilterEl();
+  if (!sel) return;
+
+  const prev = sel.value || currentVehicleFilter || 'all';
+  const codes = (vehicles || [])
+    .map(v => normalizeCode(v?.code))
+    .filter(Boolean);
+
+  // unique + sort
+  const uniq = Array.from(new Set(codes)).sort((a,b)=> a.localeCompare(b, 'id'));
+
+  // rebuild options only if changed to avoid flicker
+  const existing = Array.from(sel.options).map(o=>o.value);
+  const wanted = ['all', ...uniq];
+  const same = existing.length === wanted.length && existing.every((v,i)=> v===wanted[i]);
+
+  if (!same){
+    sel.innerHTML = '';
+    const optAll = document.createElement('option');
+    optAll.value = 'all';
+    optAll.textContent = 'Semua Kendaraan';
+    sel.appendChild(optAll);
+
+    for (const c of uniq){
+      const o = document.createElement('option');
+      o.value = c;
+      o.textContent = c;
+      sel.appendChild(o);
+    }
+  }
+
+  // restore selection
+  sel.value = wanted.includes(prev) ? prev : 'all';
+  currentVehicleFilter = sel.value || 'all';
+
+  // bind once
+  if (!sel.__bound){
+    sel.__bound = true;
+    sel.addEventListener('change', ()=> {
+      // support both inline onchange and listener
+      applyVehicleFilter(sel.value, { focus:true });
+    });
+  }
+
+  // expose global for inline HTML onchange="filterMapVehicles()"
+  if (!window.filterMapVehicles){
+    window.filterMapVehicles = () => {
+      const v = getVehicleFilterEl()?.value || 'all';
+      applyVehicleFilter(v, { focus:true });
+    };
+  }
+}
+
+function markerVisibleFor(code){
+  if (!currentVehicleFilter || currentVehicleFilter === 'all') return true;
+  return normalizeCode(code) === normalizeCode(currentVehicleFilter);
+}
+
+function applyVehicleFilter(value, { focus=false } = {}){
+  currentVehicleFilter = value ? String(value) : 'all';
+
+  // update marker layers based on filter
+  try{
+    if (map){
+      for (const [code, marker] of Object.entries(vehicleMarkers)){
+        const shouldShow = markerVisibleFor(code);
+        const has = map.hasLayer(marker);
+        if (shouldShow && !has){
+          marker.addTo(map);
+        } else if (!shouldShow && has){
+          map.removeLayer(marker);
+        }
+      }
+    }
+  }catch(e){}
+
+  // render cards
+  try{ renderVehicleCards(lastVehiclesSnapshot); }catch(e){}
+
+  // optionally focus map on selected marker
+  if (focus && map && currentVehicleFilter && currentVehicleFilter !== 'all'){
+    const code = normalizeCode(currentVehicleFilter);
+    const m = vehicleMarkers[code];
+    if (m){
+      try{
+        const ll = m.getLatLng();
+        if (ll) map.setView(ll, Math.max(map.getZoom(), 14), { animate:true });
+      }catch(e){}
+      try{ m.openPopup?.(); }catch(e){}
+    }
+  }
+}
+
+function renderVehicleCards(vehicles){
+  const wrap = getVehicleCardsEl();
+  if (!wrap) return;
+
+  const list = (vehicles || []).filter(v=>{
+    const code = normalizeCode(v?.code);
+    if (!code) return false;
+    return (currentVehicleFilter === 'all') ? true : (code === normalizeCode(currentVehicleFilter));
+  });
+
+  if (!list.length){
+    wrap.innerHTML = `<div style="opacity:.75; padding:10px;">Tidak ada kendaraan.</div>`;
+    return;
+  }
+
+  // sort by code
+  list.sort((a,b)=> normalizeCode(a.code).localeCompare(normalizeCode(b.code), 'id'));
+
+  wrap.innerHTML = list.map(v=>{
+    const code = normalizeCode(v.code);
+    const type = v.type ? String(v.type) : '';
+    const drv  = v.driver ? String(v.driver) : '';
+    const st   = v.status ? String(v.status) : '';
+    const lat  = Number(v.currentLocation?.lat);
+    const lng  = Number(v.currentLocation?.lng);
+    const locOk = Number.isFinite(lat) && Number.isFinite(lng);
+
+    return `
+      <div class="vehicle-card" data-code="${esc(code)}" title="Klik untuk fokus ke kendaraan">
+        <h4>${esc(code)} <span style="font-weight:700; opacity:.75;">${esc(type)}</span></h4>
+        <div style="margin-top:6px; font-weight:700;">Status: <span style="font-weight:900;">${esc(st || '-')}</span></div>
+        <div style="margin-top:4px; opacity:.85;">Driver: ${esc(drv || '-')}</div>
+        <div style="margin-top:4px; opacity:.75; font-size:12px;">
+          Lokasi: ${locOk ? `${lat.toFixed(6)}, ${lng.toFixed(6)}` : '—'}
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  // click handlers
+  wrap.querySelectorAll('.vehicle-card').forEach(card=>{
+    card.addEventListener('click', ()=>{
+      const code = card.getAttribute('data-code') || '';
+      const sel = getVehicleFilterEl();
+      if (sel){
+        sel.value = code;
+      }
+      applyVehicleFilter(code, { focus:true });
+      // also open drawer if available (requires last known session in drawerState)
+      try{
+        if (drawerState?.session) openDrawer(code, drawerState.session);
+      }catch(e){}
+    });
+  });
+}
+
 // cache untuk mencegah fetch manifest berulang
 let manifestLoadedAt = {}; // { [vehicleCode]: timestamp }
 let manifestLoading = {};  // { [vehicleCode]: true/false }
@@ -680,6 +839,11 @@ export async function refreshMap(session, { includeManifest = 0, fitMode = 'none
     }
 
     setTrackVehicleOptionsUI(vehicles, { keepValue: true });
+
+    // ✅ Live Maps: populate & apply vehicle filter
+    lastVehiclesSnapshot = vehicles;
+    ensureVehicleFilterOptions(vehicles);
+    applyVehicleFilter(currentVehicleFilter, { focus:false });
 
 
     const seen = new Set();

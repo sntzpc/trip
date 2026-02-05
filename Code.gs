@@ -208,7 +208,7 @@ function ensureInitializedHard_(force){
   ensureHeader(sh(CONFIG.SHEETS.VEHICLES), ['Code','Type','Capacity','Driver','DriverPhone','Latitude','Longitude','Status','Passengers','Barcode','TripId','LastLocAt','LastLocBy','LastUpdateAt']);
   ensureHeader(sh(CONFIG.SHEETS.PARTICIPANTS), ['NIK','Nama','Relationship','Region','Estate','Vehicle','Arrived','ArrivalTime','MainNIK','TripId','UpdatedAt']);
   ensureHeader(sh(CONFIG.SHEETS.ARRIVALS), ['NIK','ArrivalTime','ConfirmedBy','TripId']);
-  ensureHeader(sh(CONFIG.SHEETS.HISTORY), ['DataType','ArchivedDate','Data']);
+  ensureHeader(sh(CONFIG.SHEETS.HISTORY), ['DataType','ArchivedDate','Data','RestoredAt','RestoredBy','RestoredTo','RestoredKey','RestoreStatus']);
   ensureHeader(sh(CONFIG.SHEETS.SESSIONS), ['SessionId','UserId','Created','Expiry','Status']);
   ensureHeader(sh(CONFIG.SHEETS.SETTINGS), ['Key','Value']);
   ensureHeader(sh(CONFIG.SHEETS.TRIPS), ['TripId','Name','Start','End','Origin','Destination','Status']);
@@ -440,8 +440,20 @@ function setConfigKV(obj){
   const data = sheet.getDataRange().getValues();
   const map = {};
   for (let i=1;i<data.length;i++) map[String(data[i][0])] = i+1;
+
   Object.keys(obj).forEach(k=>{
-    const v = obj[k];
+    let v = obj[k];
+
+    // keamanan: jangan simpan PIN bypass dalam bentuk plain-text
+    // Frontend mengirim: arrivalBypassPin atau arrivalBypassPin:<TripId>
+    if (String(k).startsWith('arrivalBypassPin')){
+      const suffix = String(k).includes(':') ? String(k).split(':').slice(1).join(':') : '';
+      const hashKey = suffix ? ('arrivalBypassPinHash:' + suffix) : 'arrivalBypassPinHash';
+      const pinHash = hashPassword(String(v||''));
+      k = hashKey;
+      v = pinHash;
+    }
+
     if (map[k]) sheet.getRange(map[k],2).setValue(v);
     else sheet.appendRow([k,v]);
   });
@@ -450,6 +462,115 @@ function setConfigKV(obj){
 function getActiveTripId(){
   const cfg = getConfig().config;
   return String(cfg.activeTripId || '').trim();
+}
+
+
+// ===== Arrival Geofence (Per Trip) =====
+// Disimpan di sheet SETTINGS (Key/Value)
+// Key:
+//  - arrivalGeofence:<TripId>  (JSON string: {"lat":-1.23,"lng":102.34,"radiusM":150})
+//  - fallback: arrivalGeofence (untuk global)
+function getArrivalGeofences_(tripId){
+  const sheet = sh(CONFIG.SHEETS.SETTINGS);
+  const data = sheet.getDataRange().getValues();
+  const tid = String(tripId||'').trim();
+
+  const keyPlural1 = 'arrivalGeofences:' + tid;
+  const keyPlural2 = 'arrivalGeofences';
+  const keySingle1 = 'arrivalGeofence:' + tid;
+  const keySingle2 = 'arrivalGeofence';
+
+  let raw = '';
+  for (let i=1;i<data.length;i++){
+    const k = String(data[i][0]||'').trim();
+    if (tid && k === keyPlural1){ raw = String(data[i][1]||''); break; }
+    if (tid && k === keySingle1){ raw = String(data[i][1]||''); break; }
+    if (!raw && k === keyPlural2) raw = String(data[i][1]||'');
+    if (!raw && k === keySingle2) raw = String(data[i][1]||'');
+  }
+  raw = String(raw||'').trim();
+  if (!raw) return [];
+
+  let parsed = null;
+  try{ parsed = JSON.parse(raw); }catch(e){}
+
+  // dukung format "lat,lng,radius"
+  if (!parsed && raw.includes(',')){
+    const parts = raw.split(',').map(s=>String(s).trim());
+    if (parts.length >= 3){
+      parsed = { lat:Number(parts[0]), lng:Number(parts[1]), radiusM:Number(parts[2]) };
+    }
+  }
+
+  const fences = [];
+  const push = (obj, idx)=>{
+    const lat = Number(obj && obj.lat);
+    const lng = Number(obj && obj.lng);
+    const radiusM = Number((obj && (obj.radiusM || obj.radius || obj.r)) || 0);
+    if (!isFinite(lat) || !isFinite(lng) || !isFinite(radiusM) || radiusM <= 0) return;
+    fences.push({
+      id: String((obj && (obj.id || obj.name)) || ('P'+(idx+1))),
+      name: String((obj && (obj.name || obj.label)) || ('Titik '+(idx+1))),
+      lat: lat, lng: lng, radiusM: radiusM
+    });
+  };
+
+  if (Array.isArray(parsed)){
+    parsed.forEach(push);
+  } else if (parsed && Array.isArray(parsed.points)){
+    parsed.points.forEach(push);
+  } else if (parsed && parsed.lat != null && parsed.lng != null){
+    push(parsed, 0);
+  }
+
+  return fences;
+}
+
+// Backward compatible: return fence tunggal (titik pertama)
+function getArrivalGeofence_(tripId){
+  const fences = getArrivalGeofences_(tripId);
+  return fences && fences.length ? { lat:fences[0].lat, lng:fences[0].lng, radiusM:fences[0].radiusM } : null;
+}
+
+function haversineMeters_(lat1, lon1, lat2, lon2){
+  const R = 6371000; // meter
+  const toRad = x => x * Math.PI/180;
+  const dLat = toRad(lat2-lat1);
+  const dLon = toRad(lon2-lon1);
+  const a = Math.sin(dLat/2)*Math.sin(dLat/2) +
+            Math.cos(toRad(lat1))*Math.cos(toRad(lat2)) *
+            Math.sin(dLon/2)*Math.sin(dLon/2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+  return R*c;
+}
+
+function getArrivalBypassConfig_(tripId){
+  const sheet = sh(CONFIG.SHEETS.SETTINGS);
+  const data = sheet.getDataRange().getValues();
+  const tid = String(tripId||'').trim();
+
+  const keyEn1 = 'arrivalBypassEnabled:' + tid;
+  const keyEn2 = 'arrivalBypassEnabled';
+  const keyHash1 = 'arrivalBypassPinHash:' + tid;
+  const keyHash2 = 'arrivalBypassPinHash';
+
+  let enabledRaw = '';
+  let hashRaw = '';
+
+  for (let i=1;i<data.length;i++){
+    const k = String(data[i][0]||'').trim();
+    const v = String(data[i][1]||'').trim();
+
+    if (tid && k === keyEn1) enabledRaw = v;
+    if (tid && k === keyHash1) hashRaw = v;
+
+    if (!enabledRaw && k === keyEn2) enabledRaw = v;
+    if (!hashRaw && k === keyHash2) hashRaw = v;
+  }
+
+  const en = String(enabledRaw||'').toLowerCase();
+  const enabled = (en === 'true' || en === '1' || en === 'yes' || en === 'on' || en === 'y' || en === 'enable' || en === 'enabled' || en === 'true');
+  return { enabled: !!enabled, pinHash: String(hashRaw||'').trim() };
 }
 
 // ===== Auth =====
@@ -991,33 +1112,105 @@ function confirmArrival(params){
 
   return withIdempotent_(params, 'confirmArrival', userId, function(){
 
-  const tripId = String(params.tripId||'').trim();
-  let nikList = [];
-  try{ nikList = JSON.parse(params.nikList||'[]'); }catch{ nikList = String(params.nikList||'').split(';'); }
-  nikList = (nikList||[]).map(s=>String(s).trim()).filter(Boolean);
-  if (!nikList.length) return { success:false, message:'NIK list kosong' };
+    const tripId = String(params.tripId||'').trim();
+    let nikList = [];
+    try{ nikList = JSON.parse(params.nikList||'[]'); }catch{ nikList = String(params.nikList||'').split(';'); }
+    nikList = (nikList||[]).map(s=>String(s).trim()).filter(Boolean);
+    if (!nikList.length) return { success:false, message:'NIK list kosong' };
 
-  const arrivalsSheet = sh(CONFIG.SHEETS.ARRIVALS);
-  const now = new Date();
+    const lat = Number(params.lat);
+    const lng = Number(params.lng);
+    const acc = Number(params.acc || params.accuracy || 0); // meter (opsional)
 
-  // ✅ Idempotent: jangan double check-in
-  // - kalau sudah Arrived di sheet Participants, skip
-  // - kalau sudah ada record di Arrivals (nik+tripId), skip
-  const alreadyArrived = getArrivedNikSet_(tripId);
-  const alreadyInArrivals = getArrivalsNikSet_(tripId);
+    // ===== Geofence check (multi titik) =====
+    const fences = getArrivalGeofences_(tripId);
+    if (!fences.length){
+      return { success:false, message:'Lokasi kedatangan belum diatur oleh Admin. Hubungi Admin untuk mengatur geofencing.' };
+    }
 
-  nikList.forEach(nik=>{
-    const k = String(nik);
-    if (alreadyArrived.has(k)) return;
-    if (alreadyInArrivals.has(k)) return;
-    arrivalsSheet.appendRow([k, now, userId, tripId]);
-    markParticipantArrived(k, now, tripId);
-  });
+    // hit jarak terdekat (untuk pesan)
+    let best = null;
+    if (isFinite(lat) && isFinite(lng)){
+      for (let i=0;i<fences.length;i++){
+        const f = fences[i];
+        const d = haversineMeters_(lat, lng, f.lat, f.lng);
+        if (!best || d < best.distM){
+          best = { fence:f, distM:d };
+        }
+      }
+    }
 
-  // Update vehicle status if all passengers arrived
-  nikList.forEach(nik=> updateVehicleArrivalStatus(nik, tripId));
+    // toleransi = akurasi GPS (maks 50m) + 5m
+    const tol = Math.min(Math.max(acc||0, 0), 50) + 5;
 
-    return { success:true, message:'Kedatangan dikonfirmasi' };
+    const insideAny = (isFinite(lat) && isFinite(lng)) ? fences.some(f=>{
+      const d = haversineMeters_(lat, lng, f.lat, f.lng);
+      return d <= (f.radiusM + tol);
+    }) : false;
+
+    // ===== bypass (opsional) =====
+    const bypassPin = String(params.bypassPin||'').trim();
+    const bypassReason = String(params.bypassReason||'').trim();
+    let bypassUsed = false;
+
+    if (!insideAny){
+      // jika tidak ada GPS valid, langsung tolak kecuali bypass valid
+      const bp = getArrivalBypassConfig_(tripId);
+      const userRole = (function(){
+        try{
+          const users = toObjects(sh(CONFIG.SHEETS.USERS));
+          const u = users.find(x=>String(x.NIK)===String(userId));
+          return String(u?.Role || u?.role || '').toLowerCase();
+        }catch(e){ return ''; }
+      })();
+
+      const roleOk = (userRole === 'admin' || userRole === 'coordinator' || userRole === 'koordinator');
+
+      const pinOk = (bp.enabled && bp.pinHash && bypassPin && (hashPassword(bypassPin) === String(bp.pinHash)));
+
+      if (roleOk && pinOk){
+        bypassUsed = true;
+      } else {
+        if (!isFinite(lat) || !isFinite(lng)){
+          return { success:false, message:'Lokasi GPS tidak valid / belum diizinkan. Aktifkan GPS lalu coba lagi.' };
+        }
+        const nearestName = best?.fence?.name || 'titik kedatangan';
+        const nearestRadius = best?.fence?.radiusM || fences[0].radiusM;
+        const distM = best ? best.distM : 999999;
+        return {
+          success:false,
+          message:'Anda belum tiba di lokasi. Jarak Anda ±' + Math.round(distM) + 'm dari ' + nearestName +
+                  ' (radius ' + Math.round(nearestRadius) + 'm).'
+        };
+      }
+    }
+
+    const arrivalsSheet = sh(CONFIG.SHEETS.ARRIVALS);
+    const now = new Date();
+
+    // ✅ Idempotent: jangan double check-in
+    const alreadyArrived = getArrivedNikSet_(tripId);
+    const alreadyInArrivals = getArrivalsNikSet_(tripId);
+
+    nikList.forEach(nik=>{
+      const k = String(nik);
+      if (alreadyArrived.has(k)) return;
+      if (alreadyInArrivals.has(k)) return;
+      arrivalsSheet.appendRow([k, now, userId, tripId]);
+      markParticipantArrived(k, now, tripId);
+    });
+
+    // Update vehicle status if all passengers arrived
+    nikList.forEach(nik=> updateVehicleArrivalStatus(nik, tripId));
+
+    return {
+      success:true,
+      message: bypassUsed ? 'Kedatangan dicatat (BYPASS).' : 'Kedatangan dikonfirmasi',
+      bypassUsed: bypassUsed,
+      bypassReason: bypassReason,
+      nearestFence: best ? best.fence : null,
+      distM: best ? best.distM : null
+    };
   });
 }
 
@@ -1138,7 +1331,7 @@ function adminGetData(params){
     return { success:true, participants: parts };
   }
   if (dataType === 'history'){
-    return { success:true, history: toObjects(sh(CONFIG.SHEETS.HISTORY)) };
+    return { success:true, history: listHistory_() };
   }
   if (dataType === 'config'){
     return getConfig();
@@ -1176,6 +1369,8 @@ function adminUpdate(params){
         return { success:true, message:'Config updated' };
       case 'trip':
         return updateTrip(op, data);
+      case 'history':
+        return updateHistory_(op, data, userId);
       default:
         return { success:false, message:'Tipe data tidak valid' };
     }
@@ -1795,4 +1990,250 @@ function archiveAndClearSheet_(sheetName, dataType){
   // hapus data sumber (row2 dst), header tetap
   src.getRange(2, 1, lastRow-1, lastCol).clearContent();
 }
+
+// ==========================
+// History restore (Admin)
+// ==========================
+function listHistory_(){
+  const sheet = sh(CONFIG.SHEETS.HISTORY);
+  const lastRow = sheet.getLastRow();
+  const lastCol = sheet.getLastColumn();
+  if (lastRow <= 1 || lastCol <= 0) return [];
+
+  const headers = sheet.getRange(1,1,1,lastCol).getValues()[0].map(h => String(h||'').trim());
+  const values = sheet.getRange(2,1,lastRow-1,lastCol).getValues();
+
+  const out = [];
+  for (let i=0;i<values.length;i++){
+    const rowObj = { Row: i + 2 }; // 1-based row index in sheet
+    for (let c=0;c<headers.length;c++){
+      rowObj[headers[c] || ('COL_' + (c+1))] = values[i][c];
+    }
+    // parse JSON for quick filter
+    try{
+      rowObj._dataObj = JSON.parse(String(rowObj.Data||'{}'));
+      rowObj._tripId = String(rowObj._dataObj.TripId || '').trim();
+    }catch(e){
+      rowObj._dataObj = null;
+      rowObj._tripId = '';
+    }
+    out.push(rowObj);
+  }
+  return out;
+}
+
+function updateHistory_(op, data, restoredByUserId){
+  const action = String(op||'').toLowerCase();
+  if (action === 'restore') return restoreHistory_(data || {}, restoredByUserId);
+  return { success:false, message:'Aksi history tidak valid' };
+}
+
+function restoreHistory_(payload, restoredByUserId){
+  // payload:
+  //  - mode: selected | trip | all
+  //  - rows: [sheetRowNumber...]
+  //  - tripId: 'TRIP-...'
+  //  - force: true/false (restore ulang walau sudah restored)
+  const mode = String(payload.mode||'selected').toLowerCase();
+  const force = !!payload.force;
+
+  const history = sh(CONFIG.SHEETS.HISTORY);
+  ensureHeader(history, ['DataType','ArchivedDate','Data','RestoredAt','RestoredBy','RestoredTo','RestoredKey','RestoreStatus']);
+
+  const lastRow = history.getLastRow();
+  const lastCol = history.getLastColumn();
+  if (lastRow <= 1) return { success:true, restored:0, skipped:0, failed:0, message:'History kosong' };
+
+  const headers = history.getRange(1,1,1,lastCol).getValues()[0].map(h => String(h||'').trim());
+  const col = (name)=> headers.indexOf(name) + 1;
+  const cDataType = col('DataType');
+  const cArchived = col('ArchivedDate');
+  const cData = col('Data');
+  const cRestoredAt = col('RestoredAt');
+  const cRestoredBy = col('RestoredBy');
+  const cRestoredTo = col('RestoredTo');
+  const cRestoredKey = col('RestoredKey');
+  const cStatus = col('RestoreStatus');
+
+  const values = history.getRange(2,1,lastRow-1,lastCol).getValues();
+
+  // target selector
+  let selectedIdx = [];
+  if (mode === 'all'){
+    selectedIdx = values.map((_,i)=> i);
+  } else if (mode === 'trip'){
+    const tripId = String(payload.tripId||'').trim();
+    if (!tripId) return { success:false, message:'tripId wajib untuk mode trip' };
+    for (let i=0;i<values.length;i++){
+      const dataJson = String(values[i][cData-1]||'');
+      let obj=null;
+      try{ obj = JSON.parse(dataJson); }catch(e){}
+      const t = String(obj?.TripId || '').trim();
+      if (t && t === tripId) selectedIdx.push(i);
+    }
+  } else {
+    const rows = Array.isArray(payload.rows) ? payload.rows : [];
+    const want = new Set(rows.map(r=>Number(r)).filter(n=>n>=2));
+    for (let i=0;i<values.length;i++){
+      const sheetRow = i + 2;
+      if (want.has(sheetRow)) selectedIdx.push(i);
+    }
+  }
+
+  if (!selectedIdx.length) return { success:true, restored:0, skipped:0, failed:0, message:'Tidak ada item yang dipilih' };
+
+  // Prepare target sheets + existing keys
+  const typeMap = {
+    'VEHICLE': CONFIG.SHEETS.VEHICLES,
+    'PARTICIPANT': CONFIG.SHEETS.PARTICIPANTS,
+    'ARRIVAL': CONFIG.SHEETS.ARRIVALS,
+    'SESSION': CONFIG.SHEETS.SESSIONS
+  };
+
+  const existingKeyByType = {};
+  const targetHeadersByType = {};
+
+  function getKey_(dtype, obj){
+    const t = String(dtype||'').toUpperCase();
+    if (t === 'VEHICLE'){
+      return String(obj.Code||'') + '|' + String(obj.TripId||'');
+    }
+    if (t === 'PARTICIPANT'){
+      return String(obj.NIK||'') + '|' + String(obj.TripId||'');
+    }
+    if (t === 'ARRIVAL'){
+      return String(obj.NIK||'') + '|' + String(obj.TripId||'');
+    }
+    if (t === 'SESSION'){
+      return String(obj.SessionId||'');
+    }
+    return '';
+  }
+
+  function loadExistingKeys_(dtype){
+    const t = String(dtype||'').toUpperCase();
+    if (existingKeyByType[t]) return;
+
+    const sheetName = typeMap[t];
+    if (!sheetName) { existingKeyByType[t] = new Set(); return; }
+
+    const s = sh(sheetName);
+    const lr = s.getLastRow();
+    const lc = s.getLastColumn();
+    if (lr <= 1 || lc <= 0) { existingKeyByType[t] = new Set(); targetHeadersByType[t] = []; return; }
+
+    const hdr = s.getRange(1,1,1,lc).getValues()[0].map(h=>String(h||'').trim());
+    targetHeadersByType[t] = hdr;
+
+    const vals = s.getRange(2,1,lr-1,lc).getValues();
+    const set = new Set();
+    for (let i=0;i<vals.length;i++){
+      const rowObj = {};
+      for (let c=0;c<hdr.length;c++) rowObj[hdr[c]] = vals[i][c];
+      const k = getKey_(t, rowObj);
+      if (k) set.add(k);
+    }
+    existingKeyByType[t] = set;
+  }
+
+  let restored=0, skipped=0, failed=0;
+  const updates = []; // {row, values: {col:value}}
+  const appendByType = {}; // t -> [obj...]
+  const idxToRowNum = (idx)=> idx + 2;
+
+  // build selected items
+  selectedIdx.forEach(i=>{
+    const rowNum = idxToRowNum(i);
+    const dtype = String(values[i][cDataType-1]||'').toUpperCase().trim();
+    const dataJson = String(values[i][cData-1]||'');
+    const already = values[i][cRestoredAt-1];
+
+    if (already && !force){
+      skipped++;
+      updates.push({ row: rowNum, status: 'SKIPPED_ALREADY_RESTORED' });
+      return;
+    }
+
+    let obj=null;
+    try{ obj = JSON.parse(dataJson); }catch(e){}
+    if (!obj || typeof obj !== 'object'){
+      failed++;
+      updates.push({ row: rowNum, status: 'FAILED_BAD_JSON' });
+      return;
+    }
+    if (!typeMap[dtype]){
+      failed++;
+      updates.push({ row: rowNum, status: 'FAILED_UNKNOWN_TYPE' });
+      return;
+    }
+
+    const key = getKey_(dtype, obj);
+    loadExistingKeys_(dtype);
+
+    if (key && existingKeyByType[dtype].has(key)){
+      skipped++;
+      updates.push({ row: rowNum, status: 'SKIPPED_DUPLICATE', key, to: typeMap[dtype] });
+      return;
+    }
+
+    // ensure header includes all keys
+    const target = sh(typeMap[dtype]);
+    const keys = Object.keys(obj||{});
+    ensureHeader(target, keys);
+
+    // refresh header after ensure
+    const lc = target.getLastColumn();
+    const hdr = target.getRange(1,1,1,lc).getValues()[0].map(h=>String(h||'').trim());
+    targetHeadersByType[dtype] = hdr;
+
+    appendByType[dtype] = appendByType[dtype] || [];
+    appendByType[dtype].push({ obj, key, rowNum });
+  });
+
+  // append per type (bulk)
+  Object.keys(appendByType).forEach(dtype=>{
+    const sheetName = typeMap[dtype];
+    const target = sh(sheetName);
+    const hdr = targetHeadersByType[dtype] || target.getRange(1,1,1,target.getLastColumn()).getValues()[0].map(h=>String(h||'').trim());
+
+    const rows = appendByType[dtype].map(({obj})=>{
+      return hdr.map(h=> (h in obj) ? obj[h] : '');
+    });
+
+    if (rows.length){
+      const start = target.getLastRow() + 1;
+      target.getRange(start, 1, rows.length, hdr.length).setValues(rows);
+      // update existing key set
+      appendByType[dtype].forEach(({key})=>{
+        if (key) existingKeyByType[dtype].add(key);
+      });
+      restored += rows.length;
+
+      // mark updates for each history row
+      appendByType[dtype].forEach(({key,rowNum})=>{
+        updates.push({ row: rowNum, status:'RESTORED', key, to: sheetName });
+      });
+    }
+  });
+
+  // Apply status updates to History
+  const now = new Date();
+  const restoredBy = String(restoredByUserId || '');
+
+  updates.forEach(u=>{
+    const r = u.row;
+    if (cRestoredAt) history.getRange(r, cRestoredAt).setValue(now);
+    if (cRestoredBy) history.getRange(r, cRestoredBy).setValue(restoredBy);
+    if (cRestoredTo && u.to) history.getRange(r, cRestoredTo).setValue(u.to);
+    if (cRestoredKey && u.key) history.getRange(r, cRestoredKey).setValue(u.key);
+    if (cStatus) history.getRange(r, cStatus).setValue(u.status);
+  });
+
+  return {
+    success:true,
+    restored, skipped, failed,
+    message: `Restore selesai. Restored: ${restored}, Skipped: ${skipped}, Failed: ${failed}`
+  };
+}
+
 

@@ -579,8 +579,14 @@ export async function assignVehicle(sessionId, vehicleCode, nikList, tripId){
   return apiCall('assignVehicle', { sessionId, vehicleCode, nikList, tripId });
 }
 
-export async function confirmArrival(sessionId, nikList, tripId){
-  return apiCall('confirmArrival', { sessionId, nikList, tripId });
+export async function confirmArrival(sessionId, nikList, tripId, lat, lng, acc, opts={}){
+  const payload = { sessionId, nikList, tripId, lat, lng, acc };
+  if (opts && typeof opts === 'object'){
+    if (opts.bypassPin) payload.bypassPin = opts.bypassPin;
+    if (opts.bypassReason) payload.bypassReason = opts.bypassReason;
+    if (opts.fenceId) payload.fenceId = opts.fenceId;
+  }
+  return apiCall('confirmArrival', payload);
 }
 
 export async function getParticipants(sessionId, tripId, filter){

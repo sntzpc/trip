@@ -1,5 +1,5 @@
 import * as api from '../core/api.js';
-import { showNotification, ensureMapTrackingUI, setMapTrackingButtons, setTrackVehicleOptionsUI } from '../core/ui.js';
+import { showNotification, ensureMapTrackingUI, setMapTrackingButtons, setTrackVehicleOptionsUI, playBeep } from '../core/ui.js';
 
 let map = null;
 let vehicleMarkers = {};
@@ -10,16 +10,233 @@ let invalidatedOnce = false;
 
 // === Vehicle filter (Live Maps) ===
 let currentVehicleFilter = 'all'; // 'all' or vehicle code
+let currentGroupFilter = 'all';   // 'all' or group name
 let lastVehiclesSnapshot = [];    // latest vehicles list for cards/options
 
 function getVehicleFilterEl(){ return document.getElementById('vehicleFilter'); }
+function getGroupFilterEl(){ return document.getElementById('groupFilter'); }
 function getVehicleCardsEl(){ return document.getElementById('vehicleCards'); }
 
 function normalizeCode(code){ return String(code || '').trim(); }
 
+// ============================
+// ✅ Destination & Stop Geofence (Live Map + Notifikasi)
+// ============================
+let _fencesTripId = '';
+// dest bisa multi titik (array). stops juga array.
+let _fences = { dest: [], stops: [] };
+// simpan layers agar bisa di-clear + toggle label
+let _fenceLayers = { destCircles: [], destLabels: [], stopCircles: [], stopLabels: [] };
+
+const FENCE_LABEL_MIN_ZOOM = 10; // zoom kecil: tampilkan lingkaran saja
+
+const PROX_THRESH_M = [1000, 500, 400, 300, 200, 100, 50];
+let _proxState = { dest: {}, stops: {} }; // per fenceName
+
+function parsePointObj(raw){
+  if (!raw) return null;
+  let obj = raw;
+  try{ if (typeof raw === 'string') obj = JSON.parse(raw); }catch{}
+  if (!obj && typeof raw === 'string' && raw.includes(',')){
+    const parts = raw.split(',').map(s=>s.trim());
+    obj = { lat:Number(parts[0]), lng:Number(parts[1]), radiusM:Number(parts[2]) };
+  }
+  if (!obj) return null;
+  const lat = Number(obj.lat);
+  const lng = Number(obj.lng);
+  const radiusM = Number(obj.radiusM || obj.radius || obj.r || 0);
+  if (!isFinite(lat) || !isFinite(lng) || !isFinite(radiusM) || radiusM<=0) return null;
+  return { name: String(obj.name || obj.label || ''), lat, lng, radiusM };
+}
+
+function parsePointsArray(raw){
+  if (!raw) return [];
+  let obj = raw;
+  try{ if (typeof raw === 'string') obj = JSON.parse(raw); }catch{}
+  if (Array.isArray(obj)){
+    return obj.map(parsePointObj).filter(Boolean);
+  }
+  return [];
+}
+
+async function ensureTripFencesLoaded(session){
+  const tripId = String(session?.activeTripId || '').trim();
+  if (!tripId) return;
+  if (_fencesTripId === tripId && ((_fences?.dest?.length) || (_fences?.stops?.length))) return;
+
+  _fencesTripId = tripId;
+  _fences = { dest: [], stops: [] };
+  _proxState = { dest: {}, stops: {} };
+
+  try{
+    const cfgRes = await api.getConfig(session.sessionId);
+    const cfg = cfgRes?.config || cfgRes || {};
+    // ✅ Tujuan/Kedatangan: bisa multi titik (plural) atau single
+    const rawDestMulti = cfg[`destinationGeofences:${tripId}`] || cfg.destinationGeofences || '';
+    const rawDestSingle = cfg[`destinationGeofence:${tripId}`] || cfg.destinationGeofence || '';
+    const rawStops = cfg[`stopGeofences:${tripId}`] || cfg.stopGeofences || '';
+    const destMulti = parsePointsArray(rawDestMulti);
+    const destSingle = parsePointObj(rawDestSingle);
+    const dests = destMulti.length ? destMulti : (destSingle ? [destSingle] : []);
+    const stops = parsePointsArray(rawStops);
+    dests.forEach((d,i)=>{ d.name = d.name || (dests.length>1 ? `Tujuan ${i+1}` : 'Tujuan'); });
+    _fences.dest = dests;
+    _fences.stops = stops.map((p,i)=>({ ...p, name: p.name || `Stop ${i+1}` }));
+  }catch(e){
+    // ignore
+  }
+
+  // render di peta jika map sudah ada
+  try{ renderFencesOnMap(); }catch(e){}
+}
+
+function clearFenceLayers(){
+  try{
+    if (!map) return;
+    [...(_fenceLayers.destCircles||[]), ...(_fenceLayers.destLabels||[]), ...(_fenceLayers.stopCircles||[]), ...(_fenceLayers.stopLabels||[])].forEach(l=>{
+      try{ map.removeLayer(l); }catch(e){}
+    });
+  }catch(e){}
+  _fenceLayers = { destCircles: [], destLabels: [], stopCircles: [], stopLabels: [] };
+}
+
+function makeFenceLabelIcon(text, kind='dest'){
+  const safe = esc(text || '');
+  const cls = kind === 'stop' ? 'fence-label fence-stop' : 'fence-label fence-dest';
+  return L.divIcon({
+    className: 'fence-label-wrap',
+    html: `<div class="${cls}">${safe}</div>`,
+    iconSize: [10, 10],
+    iconAnchor: [5, 5]
+  });
+}
+
+function updateFenceLabelVisibility(){
+  if (!map) return;
+  const z = map.getZoom ? map.getZoom() : 0;
+  const show = z >= FENCE_LABEL_MIN_ZOOM;
+  const setVis = (layers, vis)=>{
+    (layers||[]).forEach(m=>{
+      try{
+        if (vis){
+          if (!map.hasLayer(m)) m.addTo(map);
+        } else {
+          if (map.hasLayer(m)) map.removeLayer(m);
+        }
+      }catch(e){}
+    });
+  };
+  setVis(_fenceLayers.destLabels, show);
+  setVis(_fenceLayers.stopLabels, show);
+}
+
+function renderFencesOnMap(){
+  if (!map) return;
+  clearFenceLayers();
+
+  // Destination (multi titik) - default: tampilkan circle; label badge muncul saat zoom mendekat
+  (_fences?.dest || []).forEach((p,i)=>{
+    const circle = L.circle([p.lat, p.lng], { radius: p.radiusM, weight:2, opacity:0.9, fillOpacity:0.08 });
+    circle.addTo(map);
+    _fenceLayers.destCircles.push(circle);
+
+    const label = L.marker([p.lat, p.lng], { title: p.name || `Tujuan ${i+1}`, icon: makeFenceLabelIcon(p.name || `Tujuan ${i+1}`, 'dest'), interactive:true, keyboard:false });
+    label.bindPopup(`<b>${esc(p.name||'Tujuan')}</b><br>Radius: ${Math.round(p.radiusM)} m`);
+    _fenceLayers.destLabels.push(label);
+  });
+
+  // Stops
+  (_fences?.stops || []).forEach((p)=>{
+    const circle = L.circle([p.lat, p.lng], { radius: p.radiusM, weight:1, opacity:0.85, fillOpacity:0.06, dashArray:'4 6' });
+    circle.addTo(map);
+    _fenceLayers.stopCircles.push(circle);
+
+    const label = L.marker([p.lat, p.lng], { title: p.name || 'Stop', icon: makeFenceLabelIcon(p.name || 'Stop', 'stop'), interactive:true, keyboard:false });
+    label.bindPopup(`<b>${esc(p.name||'Stop')}</b><br>Radius: ${Math.round(p.radiusM)} m`);
+    _fenceLayers.stopLabels.push(label);
+  });
+
+  // toggle label sesuai zoom
+  try{
+    if (!renderFencesOnMap._zoomHooked){
+      map.on('zoomend', updateFenceLabelVisibility);
+      renderFencesOnMap._zoomHooked = true;
+    }
+  }catch(e){}
+  updateFenceLabelVisibility();
+}
+
+function notifyOnce(key, message, withSound=true){
+  // dedupe per key
+  if (notifyOnce._seen?.[key]) return;
+  notifyOnce._seen = notifyOnce._seen || {};
+  notifyOnce._seen[key] = Date.now();
+  try{ showNotification(message, 'info', 3000); }catch(e){}
+  if (withSound){
+    try{ playBeep({ durationMs:160, freq: 880 }); }catch(e){}
+  }
+  try{ navigator.vibrate?.(120); }catch(e){}
+}
+
+function checkProximity(lat, lng){
+  const nowKey = ()=> `${Math.floor(Date.now()/60000)}`; // per menit (anti spam)
+
+  // Destination (multi)
+  (_fences?.dest || []).forEach((p)=>{
+    const d = haversineM(lat, lng, p.lat, p.lng);
+    const kBase = `dest:${p.name}`;
+
+    // thresholds
+    for (const t of PROX_THRESH_M){
+      if (d <= t){
+        const k = `${kBase}:t${t}:${nowKey()}`;
+        notifyOnce(k, `Mendekati ${p.name||'Tujuan'}: ${Math.round(d)} m (<= ${t} m)`);
+        break;
+      }
+    }
+
+    // arrived (inside radius)
+    if (d <= p.radiusM){
+      const k = `${kBase}:arr:${nowKey()}`;
+      notifyOnce(k, `TIBA di ${p.name||'Tujuan'} ✅`, true);
+    }
+  });
+
+  // Stops
+  for (const p of (_fences?.stops || [])){
+    const d = haversineM(lat, lng, p.lat, p.lng);
+    const kBase = `stop:${p.name}`;
+    for (const t of PROX_THRESH_M){
+      if (d <= t){
+        const k = `${kBase}:t${t}:${nowKey()}`;
+        notifyOnce(k, `Mendekati ${p.name||'Pemberhentian'}: ${Math.round(d)} m (<= ${t} m)`);
+        break;
+      }
+    }
+    if (d <= p.radiusM){
+      const k = `${kBase}:arr:${nowKey()}`;
+      notifyOnce(k, `TIBA di ${p.name||'Pemberhentian'} (stop)`, true);
+    }
+  }
+}
+
+function esc(s){
+  return String(s??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#39;');
+}
+function escAttr(s){ return esc(s).replaceAll('`',''); }
+
 function ensureVehicleFilterOptions(vehicles){
   const sel = getVehicleFilterEl();
   if (!sel) return;
+
+  // ✅ group options
+  const gSel = getGroupFilterEl();
+  if (gSel){
+    const curG = gSel.value || 'all';
+    const groups = Array.from(new Set((vehicles||[]).map(v=>String(v.group||'').trim()).filter(Boolean))).sort((a,b)=>a.localeCompare(b));
+    gSel.innerHTML = `<option value="all">Semua Group</option>` + groups.map(g=>`<option value="${escAttr(g)}">${esc(g)}</option>`).join('');
+    if (groups.includes(curG)) gSel.value = curG;
+  }
 
   const prev = sel.value || currentVehicleFilter || 'all';
   const codes = (vehicles || [])
@@ -65,15 +282,24 @@ function ensureVehicleFilterOptions(vehicles){
   // expose global for inline HTML onchange="filterMapVehicles()"
   if (!window.filterMapVehicles){
     window.filterMapVehicles = () => {
+      const g = getGroupFilterEl()?.value || 'all';
       const v = getVehicleFilterEl()?.value || 'all';
+      currentGroupFilter = String(g || 'all');
       applyVehicleFilter(v, { focus:true });
     };
   }
 }
 
 function markerVisibleFor(code){
-  if (!currentVehicleFilter || currentVehicleFilter === 'all') return true;
-  return normalizeCode(code) === normalizeCode(currentVehicleFilter);
+  const c = normalizeCode(code);
+  if (currentVehicleFilter && currentVehicleFilter !== 'all'){
+    return c === normalizeCode(currentVehicleFilter);
+  }
+  if (currentGroupFilter && currentGroupFilter !== 'all'){
+    const g = String(vehiclesByCode[c]?.group || '').trim();
+    return g === String(currentGroupFilter).trim();
+  }
+  return true;
 }
 
 function applyVehicleFilter(value, { focus=false } = {}){
@@ -118,7 +344,9 @@ function renderVehicleCards(vehicles){
   const list = (vehicles || []).filter(v=>{
     const code = normalizeCode(v?.code);
     if (!code) return false;
-    return (currentVehicleFilter === 'all') ? true : (code === normalizeCode(currentVehicleFilter));
+    if (currentVehicleFilter && currentVehicleFilter !== 'all') return code === normalizeCode(currentVehicleFilter);
+    if (currentGroupFilter && currentGroupFilter !== 'all') return String(v?.group||'').trim() === String(currentGroupFilter).trim();
+    return true;
   });
 
   if (!list.length){
@@ -553,12 +781,6 @@ async function ensureManifestForVehicle(session, code, { force=false } = {}){
   }
 }
 
-function esc(s){
-  return String(s??'')
-    .replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;')
-    .replaceAll('"','&quot;').replaceAll("'",'&#39;');
-}
-
 function ensureMapSize(){
   const el = document.getElementById('map');
   if (!el) return;
@@ -682,6 +904,9 @@ function startTracking(session, forcedVehicleCode = ''){
   // jitter per start (mencegah serentak)
   tracking._jitterMs = randJitterMs();
 
+  // ✅ load destination/stop geofence untuk notifikasi
+  try{ ensureTripFencesLoaded(session); }catch(e){}
+
   // watch posisi (lebih smooth)
   tracking.watchId = navigator.geolocation.watchPosition(
     (pos)=> { tracking._lastPos = pos; },
@@ -697,6 +922,9 @@ function startTracking(session, forcedVehicleCode = ''){
     const lat = pos.coords.latitude;
     const lng = pos.coords.longitude;
     if (!isFinite(lat) || !isFinite(lng)) return;
+
+    // ✅ Proximity notifications (destination + stops)
+    try{ checkProximity(lat, lng); }catch(e){}
 
     const now = Date.now();
 
@@ -800,6 +1028,9 @@ export async function refreshMap(session, { includeManifest = 0, fitMode = 'none
     fixLeafletAfterVisible();
 
     const tripId = session?.activeTripId || '';
+
+    // ✅ geofence tujuan/stop (live map + notifikasi)
+    try{ await ensureTripFencesLoaded(session); }catch(e){}
 
     // ✅ default: includeManifest=0 agar tidak freeze
     let res;

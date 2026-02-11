@@ -42,7 +42,7 @@ export function initAdminEnhancements(){
       </div>
 
       <div class="menu-divider" style="margin:14px 0"></div>
-      <h3 style="margin-top:0;">Titik Kedatangan (Geofence)</h3>
+      <h3 style="margin-top:0;">Tujuan / Lokasi Kedatangan (Geofence)</h3>
       <div class="admin-form-grid">
         <div class="form-group">
           <label>Latitude</label>
@@ -83,8 +83,23 @@ export function initAdminEnhancements(){
       </div>
 
       <div style="font-size:12px; color:#666; margin:-4px 0 10px; line-height:1.4;">
-        Peserta hanya dapat <b>Konfirmasi Kedatangan</b> jika berada di dalam radius ini.
-        Pastikan GPS/Location Services aktif di HP.
+        Geofence ini dipakai untuk:
+        <b>(1) Konfirmasi Kedatangan</b> (peserta harus berada di dalam radius) dan
+        <b>(2) Live Maps + Notifikasi jarak</b> (1000m, 500m, ... 50m, tiba) untuk semua user.
+        Anda boleh atur <b>multi titik</b> jika tujuan/kedatangan punya beberapa lokasi.
+      </div>
+
+      <div class="menu-divider" style="margin:14px 0"></div>
+      <h3 style="margin-top:0;">Pemberhentian Sementara (Multi Titik)</h3>
+      <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; margin-top:6px;">
+        <div style="font-weight:800;">Daftar titik pemberhentian</div>
+        <button type="button" id="cfg_addStopPoint" class="btn btn-secondary" style="padding:8px 10px;">
+          <i class="fa-solid fa-plus"></i> Tambah Titik
+        </button>
+      </div>
+      <div id="cfg_stopPoints" style="margin-top:8px;"></div>
+      <div style="font-size:12px; color:#666; margin:-4px 0 10px; line-height:1.4;">
+        Titik ini ditampilkan di Live Maps dan juga memicu notifikasi jarak, namun <b>tidak mengaktifkan Konfirmasi Kedatangan</b>.
       </div>
 
       <button class="btn-primary" id="btnSaveCfg">Simpan Pengaturan</button>
@@ -180,6 +195,9 @@ let usersPager = null;
 // ===== Arrival Geofence UI Helpers (multi titik + bypass) =====
 let _arrivalPoints = []; // [{id,name,lat,lng,radiusM}]
 
+// ✅ Pemberhentian sementara (multi titik)
+let _stopPoints = []; // [{name,lat,lng,radiusM}]
+
 function _renderArrivalPoints(){
   const box = document.getElementById('cfg_arrivalPoints');
   if (!box) return;
@@ -251,6 +269,77 @@ function _initArrivalPointsUI(){
   _renderArrivalPoints();
 }
 
+function _initStopPointsUI(){
+  const addBtn = document.getElementById('cfg_addStopPoint');
+  if (addBtn && !addBtn.__bound){
+    addBtn.__bound = true;
+    addBtn.onclick = ()=>{
+      _stopPoints.push({ name:'', lat:'', lng:'', radiusM:'' });
+      _initStopPointsUI();
+    };
+  }
+
+  const box = document.getElementById('cfg_stopPoints');
+  if (!box) return;
+
+  const row = (p,i)=>`
+    <div class="admin-form-grid" style="margin-top:10px; background:#fff; border:1px solid #e5e7eb; border-radius:14px; padding:10px;">
+      <div class="form-group">
+        <label>Nama Titik</label>
+        <input type="text" data-stop-name="${i}" placeholder="Pemberhentian ${i+1}" value="${escAttr(p?.name||'')}"/>
+      </div>
+      <div class="form-group">
+        <label>Lat</label>
+        <input type="number" step="any" data-stop-lat="${i}" placeholder="-1.234" value="${escAttr(p?.lat??'')}"/>
+      </div>
+      <div class="form-group">
+        <label>Lng</label>
+        <input type="number" step="any" data-stop-lng="${i}" placeholder="102.345" value="${escAttr(p?.lng??'')}"/>
+      </div>
+      <div class="form-group">
+        <label>Radius (m)</label>
+        <input type="number" step="1" data-stop-radius="${i}" placeholder="150" value="${escAttr(p?.radiusM??'')}"/>
+      </div>
+      <div class="form-group" style="display:flex; align-items:flex-end;">
+        <button type="button" class="btn btn-secondary" data-stop-del="${i}" style="padding:8px 10px;">
+          <i class="fa-solid fa-trash"></i> Hapus
+        </button>
+      </div>
+    </div>
+  `;
+
+  box.innerHTML = _stopPoints.length
+    ? _stopPoints.map((p,i)=> row(p,i)).join('')
+    : `<div style="opacity:.75; padding:10px; border:1px dashed #e5e7eb; border-radius:14px;">Belum ada titik pemberhentian.</div>`;
+
+  box.querySelectorAll('[data-stop-del]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const i = Number(btn.getAttribute('data-stop-del'));
+      if (!Number.isFinite(i)) return;
+      _stopPoints.splice(i,1);
+      _initStopPointsUI();
+    });
+  });
+}
+
+function _collectStopPointsFromUI(){
+  const box = document.getElementById('cfg_stopPoints');
+  if (!box) return [];
+
+  const out = [];
+  const rows = box.querySelectorAll('[data-stop-name]');
+  for (const el of rows){
+    const i = Number(el.getAttribute('data-stop-name'));
+    const name = String(box.querySelector(`[data-stop-name="${i}"]`)?.value || '').trim();
+    const lat = Number(box.querySelector(`[data-stop-lat="${i}"]`)?.value);
+    const lng = Number(box.querySelector(`[data-stop-lng="${i}"]`)?.value);
+    const radiusM = Number(box.querySelector(`[data-stop-radius="${i}"]`)?.value);
+    if (!isFinite(lat) || !isFinite(lng) || !isFinite(radiusM) || radiusM<=0) continue;
+    out.push({ name: name || `Stop ${out.length+1}`, lat, lng, radiusM });
+  }
+  return out;
+}
+
 
 export async function loadUsers(session){
   const res = await api.adminGet(session.sessionId, 'users');
@@ -301,6 +390,9 @@ export async function loadVehicles(session){
           <td>${esc(v.Type||'')}</td>
           <td>${esc(v.Capacity||'')}</td>
           <td>${esc(v.Driver||'')}</td>
+          <td>${esc(v.Unit||'')}</td>
+          <td>${esc(v.Region||'')}</td>
+          <td>${esc(v.Group||'')}</td>
           <td>${esc(v.Status||'')}</td>
           <td>${esc(v.Passengers||'')}</td>
           <td><button class="btn-small" onclick='editVehicle("${escAttr(v.Code)}")'><i class="fas fa-edit"></i></button></td>
@@ -586,12 +678,16 @@ export async function loadConfigAndTrips(session){
   $('#cfg_eventSub') && ($('#cfg_eventSub').value = cfg.eventSub || '');
   $('#cfg_activeTrip') && ($('#cfg_activeTrip').value = cfg.activeTripId || '');
 
-  // load arrival geofence for activeTripId
+  // load tujuan/kedatangan geofence (dipakai untuk Konfirmasi Kedatangan + Live Map + notifikasi)
   try{
     const tid = String(cfg.activeTripId||'').trim();
-    const keyP = tid ? `arrivalGeofences:${tid}` : 'arrivalGeofences';
-    const keyS = tid ? `arrivalGeofence:${tid}` : 'arrivalGeofence';
-    const raw = cfg[keyP] || cfg[keyS] || cfg.arrivalGeofences || cfg.arrivalGeofence || '';
+    const keyP = tid ? `destinationGeofences:${tid}` : 'destinationGeofences';
+    const keyS = tid ? `destinationGeofence:${tid}` : 'destinationGeofence';
+    // fallback kompatibilitas (versi lama)
+    const keyP2 = tid ? `arrivalGeofences:${tid}` : 'arrivalGeofences';
+    const keyS2 = tid ? `arrivalGeofence:${tid}` : 'arrivalGeofence';
+    const raw = cfg[keyP] || cfg[keyS] || cfg.destinationGeofences || cfg.destinationGeofence ||
+                cfg[keyP2] || cfg[keyS2] || cfg.arrivalGeofences || cfg.arrivalGeofence || '';
     if (raw){
       let g=null;
       try{ g = JSON.parse(raw); }catch{}
@@ -644,6 +740,31 @@ export async function loadConfigAndTrips(session){
       }
     }
   }catch(e){}
+
+  // ============================
+  // ✅ Load stop points (Pemberhentian Sementara)
+  // ============================
+  try{
+    const tid = String(cfg.activeTripId||'').trim();
+    const sKey1 = tid ? `stopGeofences:${tid}` : 'stopGeofences';
+    const rawS = String(cfg[sKey1] || cfg.stopGeofences || '').trim();
+    _stopPoints = [];
+    if (rawS){
+      let s=null;
+      try{ s = JSON.parse(rawS); }catch{}
+      if (Array.isArray(s)){
+        _stopPoints = s.map((p,i)=>({
+          name: String(p?.name||p?.label||`Stop ${i+1}`),
+          lat: Number(p?.lat),
+          lng: Number(p?.lng),
+          radiusM: Number(p?.radiusM || p?.radius || p?.r || 0)
+        })).filter(p=> isFinite(p.lat) && isFinite(p.lng) && isFinite(p.radiusM) && p.radiusM>0);
+      }
+    }
+    _initStopPointsUI();
+  }catch(e){
+    try{ if (!Array.isArray(_stopPoints)) _stopPoints = []; _initStopPointsUI(); }catch(_){ }
+  }
   // pastikan UI multi titik & bypass tetap siap walau geofence belum ada
   try{
     if (!Array.isArray(_arrivalPoints)) _arrivalPoints = [];
@@ -718,17 +839,24 @@ export async function saveConfig(session){
     extra.forEach(p=> points.push(p));
   }catch(e){}
 
+  // ✅ Simpan sebagai "Tujuan/Kedatangan" (dipakai Arrival + Live Map) + tetap simpan key lama utk kompatibilitas
+  const p0 = points[0] || null;
   if (activeTripId){
     if (points.length){
+      data[`destinationGeofences:${activeTripId}`] = JSON.stringify(points);
+      if (p0) data[`destinationGeofence:${activeTripId}`] = JSON.stringify({ name:'Tujuan', lat:p0.lat, lng:p0.lng, radiusM:p0.radiusM });
+
+      // kompatibilitas versi lama (arrival)
       data[`arrivalGeofences:${activeTripId}`] = JSON.stringify(points);
-      // tetap simpan key lama untuk kompatibilitas (pakai titik utama)
-      if (points[0]) data[`arrivalGeofence:${activeTripId}`] = JSON.stringify({ lat:points[0].lat, lng:points[0].lng, radiusM:points[0].radiusM });
+      if (p0) data[`arrivalGeofence:${activeTripId}`] = JSON.stringify({ lat:p0.lat, lng:p0.lng, radiusM:p0.radiusM });
     }
   } else {
-    // global fallback jika belum ada activeTripId
     if (points.length){
+      data['destinationGeofences'] = JSON.stringify(points);
+      if (p0) data['destinationGeofence'] = JSON.stringify({ name:'Tujuan', lat:p0.lat, lng:p0.lng, radiusM:p0.radiusM });
+
       data['arrivalGeofences'] = JSON.stringify(points);
-      if (points[0]) data['arrivalGeofence'] = JSON.stringify({ lat:points[0].lat, lng:points[0].lng, radiusM:points[0].radiusM });
+      if (p0) data['arrivalGeofence'] = JSON.stringify({ lat:p0.lat, lng:p0.lng, radiusM:p0.radiusM });
     }
   }
 
@@ -746,6 +874,20 @@ export async function saveConfig(session){
     if (pin){
       data['arrivalBypassPin'] = pin;
     }
+  }
+
+  // (Destination fields dihapus: destinationGeofence sudah mengikuti points di atas)
+
+  // ============================
+  // ✅ Stop geofences (multi titik)
+  // Key: stopGeofences:<TripId> (array)
+  // ============================
+  let stops = [];
+  try{ stops = _collectStopPointsFromUI(); }catch(e){ stops = []; }
+  if (activeTripId){
+    if (stops.length) data[`stopGeofences:${activeTripId}`] = JSON.stringify(stops);
+  } else {
+    if (stops.length) data['stopGeofences'] = JSON.stringify(stops);
   }
 
 await api.adminUpdate(session.sessionId, 'config', 'update', data);

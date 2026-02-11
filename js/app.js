@@ -1,7 +1,7 @@
 import * as api from './core/api.js';
 import { resetAllOfflineData } from './core/idb.js';
 import { LS, loadSession, saveSession, clearSession, loadCfg, saveCfg } from './core/storage.js';
-import { $, showNotification, activateMenu, showPage, toggleSidebar as _toggleSidebar, closeSidebarOnMobile } from './core/ui.js';
+import { $, showNotification, activateMenu, showPage, toggleSidebar as _toggleSidebar, closeSidebarOnMobile, showGpsBlocker, hideGpsBlocker } from './core/ui.js';
 import { doLogin, bindLoginEnter } from './pages/login.js';
 import { loadDashboard, showRegionDetailsUI, hideRegionDetailsUI } from './pages/dashboard.js';
 import { initMap, refreshMap, stopTrackingPublic, startBackgroundTrackingPublic } from './pages/map.js';
@@ -17,6 +17,106 @@ let syncTimer = null;
 
 function stopTrackingIfAny(){
   try{ stopTrackingPublic(); }catch{}
+}
+
+// ============================
+// ✅ GPS Permission Gate (global)
+// ============================
+let _gpsGateTimer = null;
+let _gpsGateVisible = false;
+
+async function queryGeoPerm(){
+  try{
+    if (navigator.permissions && navigator.permissions.query){
+      const st = await navigator.permissions.query({ name: 'geolocation' });
+      return String(st?.state || 'unknown'); // 'granted'|'prompt'|'denied'
+    }
+  }catch(e){}
+  return 'unknown';
+}
+
+function requestGeoOnce(){
+  return new Promise((resolve, reject)=>{
+    if (!navigator.geolocation) return reject(new Error('Geolocation tidak didukung'));
+    navigator.geolocation.getCurrentPosition(
+      (pos)=> resolve(pos),
+      (err)=> reject(err),
+      { enableHighAccuracy:true, timeout:12000, maximumAge:0 }
+    );
+  });
+}
+
+function startGpsGateLoop(){
+  // hanya sekali
+  if (_gpsGateTimer) return;
+
+  const show = (permState, errMsg='')=>{
+    _gpsGateVisible = true;
+    showGpsBlocker({
+      title: 'Izin Lokasi (GPS) Wajib',
+      message: permState==='denied'
+        ? 'Izin lokasi Anda sedang DITOLAK. Aktifkan izin lokasi untuk situs ini di pengaturan browser.'
+        : 'Aplikasi ini membutuhkan akses GPS untuk Live Map & geofencing.',
+      detail: errMsg ? `Detail: ${errMsg}` : '',
+      showLogout: true,
+      onRequest: async ()=>{
+        try{
+          await requestGeoOnce();
+          // ✅ jika berhasil, langsung tutup modal (tidak perlu logout/refresh)
+          hide();
+        }catch(e){
+          // tetap tampil, akan di-handle oleh tick()
+        }
+      },
+      onLogout: ()=>{ try{ window.logout?.(); }catch(e){} }
+    });
+  };
+
+  const hide = ()=>{
+    if (!_gpsGateVisible) return;
+    _gpsGateVisible = false;
+    hideGpsBlocker();
+  };
+
+  const tick = async ()=>{
+    // jika belum login, tidak perlu
+    if (!State?.session) return;
+
+    const perm = await queryGeoPerm();
+    if (perm === 'granted'){
+      hide();
+      return;
+    }
+
+    // 'prompt' → trigger request berkala (sesuai permintaan user: terus meminta izin)
+    if (perm === 'prompt'){
+      show('prompt');
+      try{
+        await requestGeoOnce();
+        const p2 = await queryGeoPerm();
+        if (p2 === 'granted') hide();
+      }catch(e){ /* ignore */ }
+      return;
+    }
+
+    // 'denied' atau unknown
+    if (perm === 'denied'){
+      show('denied');
+      return;
+    }
+
+    // unknown (browser lama) → coba getCurrentPosition; jika berhasil -> hide
+    try{
+      await requestGeoOnce();
+      hide();
+    }catch(e){
+      show('unknown', e?.message || String(e||''));
+    }
+  };
+
+  // jalankan langsung, lalu interval
+  tick();
+  _gpsGateTimer = setInterval(tick, 8000);
 }
 
 
@@ -228,6 +328,11 @@ async function afterLoginInit(){
   State.session.user = State.user;
 
   showMainApp();
+
+  // ✅ GPS Gate: aplikasi hanya berjalan normal jika izin lokasi diberikan
+  //    - Jika permission masih 'prompt', sistem akan terus memicu request (interval) sampai user memberi izin.
+  //    - Jika 'denied', tampilkan instruksi untuk mengaktifkan izin lokasi.
+  try{ startGpsGateLoop(); }catch(e){}
 
   // ✅ cek lock dulu (admin akan auto-unlock)
   try{ await refreshTripLockFromServer(); }catch{}
@@ -799,6 +904,9 @@ window.addNewVehicle = ()=>{
     Type: prompt('Jenis:', '')?.trim(),
     Capacity: Number(prompt('Kapasitas:', '4')||4),
     Driver: prompt('Driver:', '')?.trim(),
+    Unit: prompt('Unit (opsional):', '')?.trim(),
+    Region: prompt('Region (opsional):', '')?.trim(),
+    Group: prompt('Group (opsional):', '')?.trim(),
     TripId: State.session.activeTripId || '',
     Barcode: prompt('Barcode (opsional):', '')?.trim()
   };
@@ -814,6 +922,9 @@ window.editVehicle = (code)=>{
     Type: prompt('Jenis:', v0.Type||'')?.trim() ?? v0.Type,
     Capacity: Number(prompt('Kapasitas:', String(v0.Capacity||''))||v0.Capacity),
     Driver: prompt('Driver:', v0.Driver||'')?.trim() ?? v0.Driver,
+    Unit: prompt('Unit:', v0.Unit||'')?.trim() ?? v0.Unit,
+    Region: prompt('Region:', v0.Region||'')?.trim() ?? v0.Region,
+    Group: prompt('Group:', v0.Group||'')?.trim() ?? v0.Group,
     Status: prompt('Status (waiting/on_the_way/arrived):', v0.Status||'waiting')?.trim() ?? v0.Status,
     TripId: prompt('TripId:', v0.TripId||State.session.activeTripId||'')?.trim() ?? v0.TripId,
     Barcode: prompt('Barcode:', v0.Barcode||'')?.trim() ?? v0.Barcode

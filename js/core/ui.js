@@ -129,3 +129,122 @@ export function setTrackVehicleOptionsUI(vehicles, { keepValue = true } = {}){
 
   if (cur) sel.value = cur;
 }
+
+// ============================
+// ✅ GPS Permission Gate + Beep
+// ============================
+let _gpsBlockerEl = null;
+
+export function showGpsBlocker({
+  title = 'Izin Lokasi Diperlukan',
+  message = 'Aplikasi ini memerlukan akses GPS/Location.',
+  detail = '',
+  showLogout = false,
+  onRequest = null,
+  onLogout = null
+} = {}){
+  if (_gpsBlockerEl){
+    const t = _gpsBlockerEl.querySelector('[data-gps-title]');
+    const m = _gpsBlockerEl.querySelector('[data-gps-message]');
+    const d = _gpsBlockerEl.querySelector('[data-gps-detail]');
+    if (t) t.textContent = title;
+    if (m) m.textContent = message;
+    if (d) d.textContent = detail || '';
+    const lo = _gpsBlockerEl.querySelector('[data-gps-logout]');
+    if (lo) lo.style.display = showLogout ? 'inline-flex' : 'none';
+
+    // ✅ update callbacks (agar tombol tidak "stuck" memakai handler lama)
+    _gpsBlockerEl.__onRequest = onRequest;
+    _gpsBlockerEl.__onLogout = onLogout;
+    return _gpsBlockerEl;
+  }
+
+  const wrap = document.createElement('div');
+  wrap.id = 'gpsBlocker';
+  wrap.style.cssText = 'position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;background:rgba(2,6,23,.75);backdrop-filter:blur(6px);padding:16px;';
+  wrap.innerHTML = `
+    <div style="max-width:520px;width:100%;background:#fff;border-radius:20px;box-shadow:0 20px 60px rgba(0,0,0,.25);overflow:hidden;">
+      <div style="padding:16px 18px;border-bottom:1px solid #eee;display:flex;gap:10px;align-items:center;">
+        <div style="width:40px;height:40px;border-radius:14px;background:#0ea5e9;display:flex;align-items:center;justify-content:center;color:#fff;font-size:18px;">📍</div>
+        <div style="flex:1;">
+          <div data-gps-title style="font-weight:1000;font-size:16px;line-height:1.2;">${title}</div>
+          <div data-gps-message style="font-weight:700;font-size:12px;color:#475569;margin-top:4px;">${message}</div>
+        </div>
+      </div>
+      <div style="padding:16px 18px;">
+        <div data-gps-detail style="font-size:12px;color:#334155;line-height:1.4;white-space:pre-wrap;">${detail || ''}</div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:14px;">
+          <button data-gps-request class="btn-primary" style="border-radius:14px;">
+            <span class="btn-text">Izinkan Lokasi</span>
+            <span class="btn-spinner" style="display:none;"><i class="fas fa-spinner fa-spin"></i></span>
+          </button>
+          <button data-gps-retry class="btn-secondary" style="border-radius:14px;">
+            <span class="btn-text">Cek Lagi</span>
+            <span class="btn-spinner" style="display:none;"><i class="fas fa-spinner fa-spin"></i></span>
+          </button>
+          <button data-gps-logout class="btn-danger" style="border-radius:14px;display:${showLogout ? 'inline-flex' : 'none'};">
+            <span class="btn-text">Logout</span>
+            <span class="btn-spinner" style="display:none;"><i class="fas fa-spinner fa-spin"></i></span>
+          </button>
+        </div>
+        <div style="margin-top:10px;font-size:11px;color:#64748b;line-height:1.35;">
+          Jika Anda menekan <b>Block</b>, buka pengaturan browser & aktifkan izin Lokasi untuk situs ini.
+        </div>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(wrap);
+  _gpsBlockerEl = wrap;
+
+  // simpan callback terbaru
+  wrap.__onRequest = onRequest;
+  wrap.__onLogout = onLogout;
+
+  const runBtn = async (btn, fn) => {
+    if (!btn) return;
+    try{
+      setButtonLoading(btn, true);
+      await Promise.resolve(fn && fn());
+    }catch(e){
+      // ignore
+    }finally{
+      setButtonLoading(btn, false);
+    }
+  };
+
+  wrap.querySelector('[data-gps-request]')?.addEventListener('click', ()=>{
+    runBtn(wrap.querySelector('[data-gps-request]'), ()=> wrap.__onRequest && wrap.__onRequest(false));
+  });
+  wrap.querySelector('[data-gps-retry]')?.addEventListener('click', ()=>{
+    runBtn(wrap.querySelector('[data-gps-retry]'), ()=> wrap.__onRequest && wrap.__onRequest(true));
+  });
+  wrap.querySelector('[data-gps-logout]')?.addEventListener('click', ()=>{
+    runBtn(wrap.querySelector('[data-gps-logout]'), ()=> wrap.__onLogout && wrap.__onLogout());
+  });
+
+  return wrap;
+}
+
+export function hideGpsBlocker(){
+  if (!_gpsBlockerEl) return;
+  try{ _gpsBlockerEl.remove(); }catch(e){}
+  _gpsBlockerEl = null;
+}
+
+export function playBeep({ durationMs=180, freq=880, volume=0.18 } = {}){
+  try{
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    const ctx = playBeep._ctx || (playBeep._ctx = new AC());
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.value = Number(freq) || 880;
+    gain.gain.value = Math.max(0, Math.min(Number(volume) || 0.18, 1));
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    const now = ctx.currentTime;
+    osc.start(now);
+    osc.stop(now + Math.max(0.05, durationMs/1000));
+  }catch(e){}
+}

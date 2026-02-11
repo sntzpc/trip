@@ -49,11 +49,14 @@ async function loadFences(tripId){
     const cfg = cfgRes?.config || {};
     const tid = String(tripId||'').trim();
 
-    // dukung beberapa key (prefer plural)
-    const keyPlural = tid ? `arrivalGeofences:${tid}` : 'arrivalGeofences';
-    const keySingle = tid ? `arrivalGeofence:${tid}` : 'arrivalGeofence';
+    // ✅ Geofence Tujuan/Kedatangan (prefer destination*, fallback arrival* untuk kompatibilitas)
+    const keyPlural = tid ? `destinationGeofences:${tid}` : 'destinationGeofences';
+    const keySingle = tid ? `destinationGeofence:${tid}` : 'destinationGeofence';
+    const keyPlural2 = tid ? `arrivalGeofences:${tid}` : 'arrivalGeofences';
+    const keySingle2 = tid ? `arrivalGeofence:${tid}` : 'arrivalGeofence';
 
-    const raw = cfg[keyPlural] || cfg[keySingle] || cfg.arrivalGeofences || cfg.arrivalGeofence || '';
+    const raw = cfg[keyPlural] || cfg[keySingle] || cfg.destinationGeofences || cfg.destinationGeofence ||
+                cfg[keyPlural2] || cfg[keySingle2] || cfg.arrivalGeofences || cfg.arrivalGeofence || '';
     if (!raw) return [];
 
     let parsed = null;

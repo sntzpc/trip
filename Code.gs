@@ -205,7 +205,8 @@ function ensureInitializedHard_(force){
 
   // Pastikan semua sheet ada + header lengkap
   ensureHeader(sh(CONFIG.SHEETS.USERS), ['NIK','Nama','Region','Estate','Role','PasswordHash']);
-  ensureHeader(sh(CONFIG.SHEETS.VEHICLES), ['Code','Type','Capacity','Driver','DriverPhone','Latitude','Longitude','Status','Passengers','Barcode','TripId','LastLocAt','LastLocBy','LastUpdateAt']);
+  // ✅ Vehicle meta tambahan: Unit/Region/Group untuk rekap & filter yang lebih pintar
+  ensureHeader(sh(CONFIG.SHEETS.VEHICLES), ['Code','Type','Capacity','Driver','DriverPhone','Unit','Region','Group','Latitude','Longitude','Status','Passengers','Barcode','TripId','LastLocAt','LastLocBy','LastUpdateAt']);
   ensureHeader(sh(CONFIG.SHEETS.PARTICIPANTS), ['NIK','Nama','Relationship','Region','Estate','Vehicle','Arrived','ArrivalTime','MainNIK','TripId','UpdatedAt']);
   ensureHeader(sh(CONFIG.SHEETS.ARRIVALS), ['NIK','ArrivalTime','ConfirmedBy','TripId']);
   ensureHeader(sh(CONFIG.SHEETS.HISTORY), ['DataType','ArchivedDate','Data','RestoredAt','RestoredBy','RestoredTo','RestoredKey','RestoreStatus']);
@@ -794,6 +795,9 @@ function getMapData(params){
   const iCap  = idx('Capacity');
   const iDrv  = idx('Driver');
   const iDrvHp = idx('DriverPhone');
+  const iUnit = idx('Unit');
+  const iReg2 = idx('Region');
+  const iGrp  = idx('Group');
   const iLat  = idx('Latitude');
   const iLng  = idx('Longitude');
   const iSt   = idx('Status');
@@ -817,6 +821,9 @@ function getMapData(params){
       capacity: (iCap>-1 ? row[iCap] : ''),
       driver: (iDrv>-1 ? row[iDrv] : ''),
       driverPhone: (iDrvHp>-1 ? row[iDrvHp] : ''),
+      unit: (iUnit>-1 ? row[iUnit] : ''),
+      region: (iReg2>-1 ? row[iReg2] : ''),
+      group: (iGrp>-1 ? row[iGrp] : ''),
       currentLocation: { lat: (iLat>-1 ? row[iLat] : ''), lng: (iLng>-1 ? row[iLng] : '') },
       status: (iSt>-1 ? row[iSt] : ''),
       tripId: (iTrip>-1 ? row[iTrip] : ''),
@@ -1413,19 +1420,30 @@ function updateVehicle(action, vehicleData){
     if (!vehicleData.Code) return { success:false, message:'Code wajib' };
     const found = findRowBy(sheet,'Code',vehicleData.Code);
     if (found.row !== -1) return { success:false, message:'Kode sudah ada' };
-    sheet.appendRow([
-      vehicleData.Code,
-      vehicleData.Type || '',
-      vehicleData.Capacity || '',
-      vehicleData.Driver || '',
-      vehicleData.DriverPhone || '',
-      '',
-      '',
-      vehicleData.Status || 'waiting',
-      '',
-      vehicleData.Barcode || '',
-      vehicleData.TripId || ''
-    ]);
+    // ✅ robust: susun row berdasarkan header (tidak tergantung urutan kolom)
+    const headers = sheet.getRange(1,1,1,sheet.getLastColumn()).getValues()[0].map(String);
+    const row = new Array(headers.length).fill('');
+    const set = (k, v)=>{
+      const i = headers.indexOf(k);
+      if (i>-1) row[i] = v;
+    };
+
+    set('Code', vehicleData.Code);
+    set('Type', vehicleData.Type || '');
+    set('Capacity', vehicleData.Capacity || '');
+    set('Driver', vehicleData.Driver || '');
+    set('DriverPhone', vehicleData.DriverPhone || '');
+    set('Unit', vehicleData.Unit || '');
+    set('Region', vehicleData.Region || '');
+    set('Group', vehicleData.Group || '');
+    set('Latitude', '');
+    set('Longitude', '');
+    set('Status', vehicleData.Status || 'waiting');
+    set('Passengers', '');
+    set('Barcode', vehicleData.Barcode || '');
+    set('TripId', vehicleData.TripId || '');
+
+    sheet.appendRow(row);
     return { success:true, message:'Kendaraan berhasil ditambahkan' };
   }
   if (action === 'update'){

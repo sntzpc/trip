@@ -329,6 +329,9 @@
                         </div>
                         <div class="vehicle-selector">
                             <h4>Filter Kendaraan</h4>
+                            <select id="groupFilter" onchange="filterMapVehicles()" style="margin-bottom:8px;">
+                                <option value="all">Semua Group</option>
+                            </select>
                             <select id="vehicleFilter" onchange="filterMapVehicles()">
                                 <option value="all">Semua Kendaraan</option>
                             </select>
@@ -520,6 +523,9 @@
                                             <th>Jenis</th>
                                             <th>Kapasitas</th>
                                             <th>Pengemudi</th>
+                                            <th>Unit</th>
+                                            <th>Region</th>
+                                            <th>Group</th>
                                             <th>Status</th>
                                             <th>Penumpang</th>
                                             <th>Aksi</th>

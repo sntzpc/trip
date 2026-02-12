@@ -56,6 +56,9 @@ function handleRequest(e){
       case 'getMapData':
         result = getMapData(params);
         break;
+      case 'map.fast':
+        result = mapFast(params);
+        break;
       case 'getVehicles':
         result = getVehicles(params);
         break;
@@ -378,7 +381,7 @@ function splitCsv_(s){
 }
 
 function joinCsv_(arr){
-  return (arr||[]).map(x=>String(x).trim()).filter(Boolean).join(',');
+  return (arr||[]).map(x=>String(x).trim()).filter(Boolean).join(';');
 }
 
 // map nik -> vehicleCode berdasarkan sheet Vehicles.Passengers (trip-filter)
@@ -803,6 +806,8 @@ function getMapData(params){
   const iSt   = idx('Status');
   const iPass = idx('Passengers');
   const iTrip = idx('TripId');
+  const iLocAt = idx('LastLocAt');
+  const iUpdAt = idx('LastUpdateAt');
 
   const vVals = vSheet.getRange(2,1,vLastRow-1,vLastCol).getValues();
 
@@ -826,6 +831,8 @@ function getMapData(params){
       group: (iGrp>-1 ? row[iGrp] : ''),
       currentLocation: { lat: (iLat>-1 ? row[iLat] : ''), lng: (iLng>-1 ? row[iLng] : '') },
       status: (iSt>-1 ? row[iSt] : ''),
+      lastLocAt: (iLocAt>-1 ? toMs_(row[iLocAt]) : 0),
+      lastUpdateAt: (iUpdAt>-1 ? toMs_(row[iUpdAt]) : 0),
       tripId: (iTrip>-1 ? row[iTrip] : ''),
       passengers
     });
@@ -886,10 +893,82 @@ function getMapData(params){
     });
   }
 
-  const out = { success:true, vehicles, manifestByVehicle };
+  const out = { success:true, now: Date.now(), vehicles, manifestByVehicle };
   cache.put(cacheKey, JSON.stringify(out), 5); // ✅ 5 detik cukup untuk realtime tapi ringan
   return out;
 }
+
+function mapFast(params){
+  const userId = validateSessionCached(params.sessionId);
+  if (!userId) return { success:false, message:'Session expired' };
+
+  const tripId = String(params.tripId||'').trim();
+  const limit = Math.min(Math.max(Number(params.limit||250), 1), 500);
+  const since = toMs_(params.since||0);
+
+  const codesCsv = String(params.codes||'').trim();
+  const codes = codesCsv ? codesCsv.split(',').map(s=>String(s||'').trim()).filter(Boolean) : [];
+  const codeSet = codes.length ? codes.reduce((a,c)=>{ a[c]=true; return a; }, {}) : null;
+
+  // cache full minimal list per trip (3 detik) lalu filter by codes/since
+  const cache = CacheService.getScriptCache();
+  const key = 'MAPFAST:' + (tripId||'ALL');
+  const cached = cache.get(key);
+  let payload;
+  if (cached){
+    try{ payload = JSON.parse(cached); }catch(e){}
+  }
+  if (!payload || !payload.vehicles){
+    const sheet = sh(CONFIG.SHEETS.VEHICLES);
+    const lastRow = sheet.getLastRow();
+    const lastCol = sheet.getLastColumn();
+    if (lastRow < 2){
+      payload = { now: Date.now(), vehicles: [] };
+    } else {
+      const headers = sheet.getRange(1,1,1,lastCol).getValues()[0].map(String);
+      const idx = name => headers.indexOf(name);
+      const iCode = idx('Code');
+      const iLat  = idx('Latitude');
+      const iLng  = idx('Longitude');
+      const iSt   = idx('Status');
+      const iTrip = idx('TripId');
+      const iLocAt= idx('LastLocAt');
+      const iUpdAt= idx('LastUpdateAt');
+
+      const vals = sheet.getRange(2,1,lastRow-1,lastCol).getValues();
+      const all = [];
+      for (let i=0;i<vals.length;i++){
+        const row = vals[i];
+        const code = iCode>-1 ? String(row[iCode]||'').trim() : '';
+        if (!code) continue;
+        if (tripId && iTrip>-1 && String(row[iTrip]||'').trim() !== tripId) continue;
+
+        const lat = parseCoordinate_(iLat>-1 ? row[iLat] : '');
+        const lng = parseCoordinate_(iLng>-1 ? row[iLng] : '');
+        if (!isFinite(lat) || !isFinite(lng)) continue;
+
+        const ts = toMs_((iLocAt>-1 ? row[iLocAt] : 0)) || toMs_((iUpdAt>-1 ? row[iUpdAt] : 0)) || 0;
+        all.push({ code, lat, lng, status: (iSt>-1 ? row[iSt] : ''), ts });
+      }
+      payload = { now: Date.now(), vehicles: all };
+    }
+    try{ cache.put(key, JSON.stringify(payload), 3); }catch(e){}
+  }
+
+  const now = Date.now();
+  const list = payload.vehicles || [];
+  const out = [];
+  for (let i=0;i<list.length;i++){
+    const v = list[i];
+    if (codeSet && !codeSet[String(v.code||'').trim()]) continue;
+    if (since && toMs_(v.ts) && toMs_(v.ts) <= since) continue;
+    out.push(v);
+    if (out.length >= limit) break;
+  }
+
+  return { success:true, now, vehicles: out };
+}
+
 
 function validateSessionCached(sessionId){
   const sid = String(sessionId||'');
@@ -956,64 +1035,66 @@ function updateVehicleLocation(params){
   const userId = validateSession(params.sessionId);
   if (!userId) return { success:false, message:'Session expired' };
 
-  const vehicleCode = String(params.vehicleCode||'').trim();
-  if (!vehicleCode) return { success:false, message:'vehicleCode kosong' };
+  return withIdempotent_(params, 'updateLocation', userId, function(){
+    const vehicleCode = String(params.vehicleCode||'').trim();
+      if (!vehicleCode) return { success:false, message:'vehicleCode kosong' };
 
-  const lat = parseCoordinate_(params.lat);
-  const lng = parseCoordinate_(params.lng);
+      const lat = parseCoordinate_(params.lat);
+      const lng = parseCoordinate_(params.lng);
 
-  if (!isFinite(lat) || !isFinite(lng)) {
-    return { success:false, message:'Koordinat tidak valid (lat/lng bukan angka).' };
-  }
-  if (lat < -90 || lat > 90 || lng < -180 || lng > 180) {
-    return { success:false, message:`Koordinat di luar range. lat=${lat}, lng=${lng}` };
-  }
+      if (!isFinite(lat) || !isFinite(lng)) {
+        return { success:false, message:'Koordinat tidak valid (lat/lng bukan angka).' };
+      }
+      if (lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+        return { success:false, message:`Koordinat di luar range. lat=${lat}, lng=${lng}` };
+      }
 
-  const sheet = sh(CONFIG.SHEETS.VEHICLES);
-  const found = findRowBy(sheet,'Code',vehicleCode);
-  if (found.row === -1) return { success:false, message:'Kendaraan tidak ditemukan' };
+      const sheet = sh(CONFIG.SHEETS.VEHICLES);
+      const found = findRowBy(sheet,'Code',vehicleCode);
+      if (found.row === -1) return { success:false, message:'Kendaraan tidak ditemukan' };
 
-  const headers = found.headers.map(String);
-  const latCol = headers.indexOf('Latitude') + 1;
-  const lngCol = headers.indexOf('Longitude') + 1;
-  const stCol  = headers.indexOf('Status') + 1;
+      const headers = found.headers.map(String);
+      const latCol = headers.indexOf('Latitude') + 1;
+      const lngCol = headers.indexOf('Longitude') + 1;
+      const stCol  = headers.indexOf('Status') + 1;
 
-  // ✅ lock fields
-  const locAtCol = headers.indexOf('LastLocAt') + 1;
-  const locByCol = headers.indexOf('LastLocBy') + 1;
-  const updAtCol = headers.indexOf('LastUpdateAt') + 1;
+      // ✅ lock fields
+      const locAtCol = headers.indexOf('LastLocAt') + 1;
+      const locByCol = headers.indexOf('LastLocBy') + 1;
+      const updAtCol = headers.indexOf('LastUpdateAt') + 1;
 
-  // ====== ✅ SOFT LOCK: hanya 1 tracker aktif per kendaraan ======
-  // Jika ada updater lain dalam 90 detik terakhir → tolak update (biar tidak dobel)
-  try{
-    const lastBy = locByCol>0 ? String(sheet.getRange(found.row, locByCol).getValue()||'').trim() : '';
-    const lastAtRaw = locAtCol>0 ? sheet.getRange(found.row, locAtCol).getValue() : '';
-    const lastAt = lastAtRaw ? new Date(lastAtRaw).getTime() : 0;
+      // ====== ✅ SOFT LOCK: hanya 1 tracker aktif per kendaraan ======
+      // Jika ada updater lain dalam 90 detik terakhir → tolak update (biar tidak dobel)
+      try{
+        const lastBy = locByCol>0 ? String(sheet.getRange(found.row, locByCol).getValue()||'').trim() : '';
+        const lastAtRaw = locAtCol>0 ? sheet.getRange(found.row, locAtCol).getValue() : '';
+        const lastAt = lastAtRaw ? new Date(lastAtRaw).getTime() : 0;
 
-    const nowMs = Date.now();
-    const RECENT_MS = 90000; // 90 detik
+        const nowMs = Date.now();
+        const RECENT_MS = 90000; // 90 detik
 
-    if (lastBy && lastBy !== String(userId) && lastAt && (nowMs - lastAt) < RECENT_MS){
-      // ✅ anggap tracker lain masih aktif, skip
-      return { success:true, skipped:true, message:'Skip: tracker lain aktif' };
-    }
-  }catch(e){}
+        if (lastBy && lastBy !== String(userId) && lastAt && (nowMs - lastAt) < RECENT_MS){
+          // ✅ anggap tracker lain masih aktif, skip
+          return { success:true, skipped:true, message:'Skip: tracker lain aktif' };
+        }
+      }catch(e){}
 
-  // ✅ simpan lokasi sebagai NUMBER
-  sheet.getRange(found.row, latCol).setValue(lat);
-  sheet.getRange(found.row, lngCol).setValue(lng);
+      // ✅ simpan lokasi sebagai NUMBER
+      sheet.getRange(found.row, latCol).setValue(lat);
+      sheet.getRange(found.row, lngCol).setValue(lng);
 
-  // status on_the_way jika belum arrived
-  const currentStatus = sheet.getRange(found.row, stCol).getValue();
-  if (String(currentStatus) !== 'arrived') sheet.getRange(found.row, stCol).setValue('on_the_way');
+      // status on_the_way jika belum arrived
+      const currentStatus = sheet.getRange(found.row, stCol).getValue();
+      if (String(currentStatus) !== 'arrived') sheet.getRange(found.row, stCol).setValue('on_the_way');
 
-  // ✅ stamp
-  const now = new Date();
-  if (locAtCol>0) sheet.getRange(found.row, locAtCol).setValue(now);
-  if (locByCol>0) sheet.getRange(found.row, locByCol).setValue(String(userId));
-  if (updAtCol>0) sheet.getRange(found.row, updAtCol).setValue(now);
+      // ✅ stamp
+      const now = new Date();
+      if (locAtCol>0) sheet.getRange(found.row, locAtCol).setValue(now);
+      if (locByCol>0) sheet.getRange(found.row, locByCol).setValue(String(userId));
+      if (updAtCol>0) sheet.getRange(found.row, updAtCol).setValue(now);
 
-  return { success:true, message:'Lokasi diperbarui', lat, lng };
+      return { success:true, message:'Lokasi diperbarui', lat, lng };
+  });
 }
 
 /**
@@ -1054,6 +1135,22 @@ function parseCoordinate_(v){
   return n;
 }
 
+function toMs_(v){
+  if (v === null || v === undefined || v === '') return 0;
+  if (typeof v === 'number') return v;
+  if (Object.prototype.toString.call(v) === '[object Date]'){
+    return v.getTime();
+  }
+  var s = String(v);
+  // if numeric string epoch
+  var n = Number(s);
+  if (isFinite(n) && n > 1000000000) return n;
+  var d = new Date(s);
+  var t = d.getTime();
+  return isFinite(t) ? t : 0;
+}
+
+
 function assignToVehicle(params){
   const userId = validateSession(params.sessionId);
   if (!userId) return { success:false, message:'Session expired' };
@@ -1085,7 +1182,7 @@ function assignToVehicle(params){
   const merged = Array.from(new Set([...currentPassengers, ...nikList]));
   if (capacity && merged.length > capacity) return { success:false, message:'Kapasitas kendaraan penuh' };
 
-  vSheet.getRange(vFound.row, passCol).setValue(merged.join(','));
+  vSheet.getRange(vFound.row, passCol).setValue(merged.join(';'));
   if (tripCol>0 && tripId) vSheet.getRange(vFound.row, tripCol).setValue(tripId);
 
   // Update participant vehicle assignment

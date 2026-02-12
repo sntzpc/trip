@@ -18,6 +18,20 @@ function uuid(){
   return 'op_' + Date.now() + '_' + Math.random().toString(16).slice(2);
 }
 
+// =====================
+// Idempotent OpId helpers (slot-based)
+// =====================
+const LOC_SLOT_MS = 30000; // 30 detik
+function locSlotEpochMs(tsMs){
+  const t = Number(tsMs || Date.now());
+  return Math.floor(t / LOC_SLOT_MS) * LOC_SLOT_MS;
+}
+function makeLocSlotOpId(vehicleCode, tsMs){
+  const code = String(vehicleCode || '').trim();
+  return `UL:${code}:${locSlotEpochMs(tsMs)}`;
+}
+
+
 function boolish(x){
   if (x === true) return true;
   const s = String(x||'').toLowerCase();
@@ -273,9 +287,22 @@ export async function apiCall(action, params = {}, { timeoutMs = 20000 } = {}){
   // ✅ OFFLINE: updateLocation disimpan ke QUEUE (khusus offline saja)
   // supaya map bisa tampil posisi kendaraan Anda saat offline
   if (!isOnline() && action === 'updateLocation'){
-    const opId = uuid();
-    const toQueue = { ...(params||{}), _opId: opId };
-    try{ await queueAdd({ opId, action, params: toQueue }); }catch{}
+    const ts = Number(params?.clientTs || Date.now());
+    const opId = String(params?._opId || '').trim() || makeLocSlotOpId(params?.vehicleCode, ts);
+    const toQueue = { ...(params||{}), clientTs: ts, _opId: opId };
+
+    // ✅ idempotent queue: jika sudah ada opId sama (slot yang sama), replace data terbaru
+    try{
+      const pending = (await queueList({ status:'pending' })) || [];
+      const same = pending.find(x => x.action === 'updateLocation' && String(x.opId||'') === opId);
+      if (same){
+        await queueUpdate(same.id, { opId, action, params: toQueue, updatedAt: Date.now(), status:'pending' });
+        return { success:true, queued:true, replaced:true, opId, offline:true, message:'Lokasi diperbarui (offline). Akan dikirim saat online.' };
+      }
+      await queueAdd({ opId, action, params: toQueue });
+    }catch{
+      try{ await queueAdd({ opId, action, params: toQueue }); }catch{}
+    }
     return { success:true, queued:true, opId, offline:true, message:'Lokasi disimpan (offline). Akan dikirim saat online.' };
   }
 
@@ -572,7 +599,9 @@ export async function getVehicles(sessionId, tripId, q){
 }
 
 export async function updateLocation(sessionId, vehicleCode, lat, lng){
-  return apiCall('updateLocation', { sessionId, vehicleCode, lat, lng });
+  const clientTs = Date.now();
+  const _opId = makeLocSlotOpId(vehicleCode, clientTs);
+  return apiCall('updateLocation', { sessionId, vehicleCode, lat, lng, clientTs, _opId }, { timeoutMs: 20000 });
 }
 
 export async function assignVehicle(sessionId, vehicleCode, nikList, tripId){
@@ -640,7 +669,18 @@ export async function processQueue(sessionId, { maxItems = 50 } = {}){
     const id = item.id;
     try{
       if (item.action === 'updateLocation'){
-        await queueUpdate(item.id, { status: 'synced', result: { success:true, skipped:true, message:'updateLocation di-skip (realtime)' }, syncedAt: Date.now() });
+        // ✅ Kirim updateLocation (idempotent via _opId slot-based)
+        await queueUpdate(id, { attempts:(item.attempts||0)+1, lastAttemptAt:Date.now(), lastError:'' });
+
+        const p = item.params || {};
+        p.sessionId = sessionId;
+
+        const res = await apiCall('updateLocation', p, { timeoutMs: 20000 });
+        if (res && res.success){
+          await queueUpdate(id, { status:'synced', result:res, syncedAt:Date.now() });
+        } else {
+          await queueUpdate(id, { status:'failed', lastError: res?.message || 'Gagal' });
+        }
         processed++;
         continue;
       }

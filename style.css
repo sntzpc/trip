@@ -1280,6 +1280,15 @@ body.sidebar-open{
 .vmk.arrived { background: #2ecc71; }     /* hijau */
 .vmk.unknown { background: #7f8c8d; }     /* abu */
 
+/* last-seen heat (lebih cepat bedakan aktif vs idle/offline) */
+.vmk.heat-hot{ opacity: 1; filter: none; }
+.vmk.heat-warm{ opacity: .92; filter: saturate(.9); }
+.vmk.heat-cool{ opacity: .78; filter: saturate(.8) grayscale(.15); }
+.vmk.heat-cold{ opacity: .60; filter: saturate(.7) grayscale(.35); }
+.vmk.heat-offline{ opacity: .38; filter: saturate(.5) grayscale(.8); }
+.vmk.heat-unk{ opacity: .55; filter: grayscale(.4); }
+
+
 /* wrapper icon Leaflet */
 .leaflet-div-icon.vmk-wrap{
   background: transparent !important;

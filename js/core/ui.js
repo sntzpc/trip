@@ -248,3 +248,44 @@ export function playBeep({ durationMs=180, freq=880, volume=0.18 } = {}){
     osc.stop(now + Math.max(0.05, durationMs/1000));
   }catch(e){}
 }
+
+
+// =============================
+// Voice (TTS) helpers for proximity notifications
+// =============================
+let _voiceUnlocked = false;
+export async function unlockVoiceOnce(){
+  if (_voiceUnlocked) return true;
+  try{
+    // beberapa browser perlu resume audio context + permission dari gesture user
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (AC){
+      const ctx = playBeep._ctx || (playBeep._ctx = new AC());
+      if (ctx.state === 'suspended') await ctx.resume();
+    }
+  }catch(e){}
+  _voiceUnlocked = true;
+  return true;
+}
+
+export function speakText(text, { lang='id-ID', rate=1.0, pitch=1.0, volume=1.0 } = {}){
+  try{
+    const t = String(text||'').trim();
+    if (!t) return false;
+    if (!('speechSynthesis' in window) || typeof SpeechSynthesisUtterance === 'undefined') return false;
+
+    // stop queue sebelumnya agar tidak menumpuk
+    try{ window.speechSynthesis.cancel(); }catch(e){}
+
+    const u = new SpeechSynthesisUtterance(t);
+    u.lang = lang;
+    u.rate = Math.max(0.7, Math.min(Number(rate)||1.0, 1.2));
+    u.pitch = Math.max(0.8, Math.min(Number(pitch)||1.0, 1.2));
+    u.volume = Math.max(0, Math.min(Number(volume)||1.0, 1));
+
+    window.speechSynthesis.speak(u);
+    return true;
+  }catch(e){
+    return false;
+  }
+}

@@ -1,5 +1,5 @@
 import * as api from '../core/api.js';
-import { showNotification, ensureMapTrackingUI, setMapTrackingButtons, setTrackVehicleOptionsUI, playBeep } from '../core/ui.js';
+import { showNotification, ensureMapTrackingUI, setMapTrackingButtons, setTrackVehicleOptionsUI, playBeep, speakText } from '../core/ui.js';
 
 let map = null;
 let vehicleMarkers = {};
@@ -7,14 +7,19 @@ let lastManifestByVehicle = {};
 let vehiclesByCode = {};
 let mapHasFittedOnce = false;
 let invalidatedOnce = false;
+let lastServerNowMs = 0; // untuk heat (last-seen)
 
 // === Vehicle filter (Live Maps) ===
-let currentVehicleFilter = 'all'; // 'all' or vehicle code
-let currentGroupFilter = 'all';   // 'all' or group name
+let currentRegionFilter = 'all';  // 'all' or region
+let currentGroupFilter  = 'all';  // 'all' or group
+let currentUnitFilter   = 'all';  // 'all' or unit
+let currentVehicleFilter= 'all';  // 'all' or vehicle code
 let lastVehiclesSnapshot = [];    // latest vehicles list for cards/options
 
-function getVehicleFilterEl(){ return document.getElementById('vehicleFilter'); }
+function getRegionFilterEl(){ return document.getElementById('regionFilter'); }
 function getGroupFilterEl(){ return document.getElementById('groupFilter'); }
+function getUnitFilterEl(){ return document.getElementById('unitFilter'); }
+function getVehicleFilterEl(){ return document.getElementById('vehicleFilter'); }
 function getVehicleCardsEl(){ return document.getElementById('vehicleCards'); }
 
 function normalizeCode(code){ return String(code || '').trim(); }
@@ -166,14 +171,18 @@ function renderFencesOnMap(){
   updateFenceLabelVisibility();
 }
 
-function notifyOnce(key, message, withSound=true){
+function notifyOnce(key, message, withSound=true, voiceText=''){
   // dedupe per key
   if (notifyOnce._seen?.[key]) return;
   notifyOnce._seen = notifyOnce._seen || {};
   notifyOnce._seen[key] = Date.now();
+
   try{ showNotification(message, 'info', 3000); }catch(e){}
   if (withSound){
     try{ playBeep({ durationMs:160, freq: 880 }); }catch(e){}
+  }
+  if (voiceText){
+    try{ speakText(String(voiceText)); }catch(e){}
   }
   try{ navigator.vibrate?.(120); }catch(e){}
 }
@@ -190,7 +199,7 @@ function checkProximity(lat, lng){
     for (const t of PROX_THRESH_M){
       if (d <= t){
         const k = `${kBase}:t${t}:${nowKey()}`;
-        notifyOnce(k, `Mendekati ${p.name||'Tujuan'}: ${Math.round(d)} m (<= ${t} m)`);
+        notifyOnce(k, `Mendekati ${p.name||'Tujuan'}: ${Math.round(d)} m (<= ${t} m)`, true, `${t} meter lagi menuju ${p.name||'tujuan'}`);
         break;
       }
     }
@@ -198,7 +207,7 @@ function checkProximity(lat, lng){
     // arrived (inside radius)
     if (d <= p.radiusM){
       const k = `${kBase}:arr:${nowKey()}`;
-      notifyOnce(k, `TIBA di ${p.name||'Tujuan'} ✅`, true);
+      notifyOnce(k, `TIBA di ${p.name||'Tujuan'} ✅`, true, `Sudah tiba di ${p.name||'tujuan'}`);
     }
   });
 
@@ -209,13 +218,13 @@ function checkProximity(lat, lng){
     for (const t of PROX_THRESH_M){
       if (d <= t){
         const k = `${kBase}:t${t}:${nowKey()}`;
-        notifyOnce(k, `Mendekati ${p.name||'Pemberhentian'}: ${Math.round(d)} m (<= ${t} m)`);
+        notifyOnce(k, `Mendekati ${p.name||'Pemberhentian'}: ${Math.round(d)} m (<= ${t} m)`, true, `${t} meter lagi menuju ${p.name||'pemberhentian'}`);
         break;
       }
     }
     if (d <= p.radiusM){
       const k = `${kBase}:arr:${nowKey()}`;
-      notifyOnce(k, `TIBA di ${p.name||'Pemberhentian'} (stop)`, true);
+      notifyOnce(k, `TIBA di ${p.name||'Pemberhentian'} (stop)`, true, `Sudah tiba di ${p.name||'pemberhentian'}`);
     }
   }
 }
@@ -226,78 +235,152 @@ function esc(s){
 function escAttr(s){ return esc(s).replaceAll('`',''); }
 
 function ensureVehicleFilterOptions(vehicles){
-  const sel = getVehicleFilterEl();
-  if (!sel) return;
-
-  // ✅ group options
+  const rSel = getRegionFilterEl();
   const gSel = getGroupFilterEl();
-  if (gSel){
-    const curG = gSel.value || 'all';
-    const groups = Array.from(new Set((vehicles||[]).map(v=>String(v.group||'').trim()).filter(Boolean))).sort((a,b)=>a.localeCompare(b));
-    gSel.innerHTML = `<option value="all">Semua Group</option>` + groups.map(g=>`<option value="${escAttr(g)}">${esc(g)}</option>`).join('');
-    if (groups.includes(curG)) gSel.value = curG;
+  const uSel = getUnitFilterEl();
+  const vSel = getVehicleFilterEl();
+  if (!vSel) return;
+
+  const allVehicles = (vehicles || []).map(v => ({
+    ...v,
+    region: String(v?.region || v?.Region || '').trim(),
+    group:  String(v?.group  || v?.Group  || '').trim(),
+    unit:   String(v?.unit   || v?.Unit   || '').trim(),
+    code:   normalizeCode(v?.code)
+  }));
+
+  // -------- Region options --------
+  if (rSel){
+    const cur = rSel.value || currentRegionFilter || 'all';
+    const regions = Array.from(new Set(allVehicles.map(v=>v.region).filter(Boolean))).sort((a,b)=>a.localeCompare(b,'id'));
+    rSel.innerHTML = `<option value="all">Semua Region</option>` + regions.map(x=>`<option value="${escAttr(x)}">${esc(x)}</option>`).join('');
+    if (regions.includes(cur)) rSel.value = cur;
   }
 
-  const prev = sel.value || currentVehicleFilter || 'all';
-  const codes = (vehicles || [])
-    .map(v => normalizeCode(v?.code))
-    .filter(Boolean);
+  const regionVal = String((rSel?.value || currentRegionFilter || 'all') || 'all');
+  const regionFiltered = regionVal !== 'all'
+    ? allVehicles.filter(v=>v.region === regionVal)
+    : allVehicles;
 
-  // unique + sort
-  const uniq = Array.from(new Set(codes)).sort((a,b)=> a.localeCompare(b, 'id'));
+  // -------- Group options (depends on region) --------
+  if (gSel){
+    const cur = gSel.value || currentGroupFilter || 'all';
+    const groups = Array.from(new Set(regionFiltered.map(v=>v.group).filter(Boolean))).sort((a,b)=>a.localeCompare(b,'id'));
+    gSel.innerHTML = `<option value="all">Semua Group</option>` + groups.map(x=>`<option value="${escAttr(x)}">${esc(x)}</option>`).join('');
+    if (groups.includes(cur)) gSel.value = cur;
+  }
 
-  // rebuild options only if changed to avoid flicker
-  const existing = Array.from(sel.options).map(o=>o.value);
+  const groupVal = String((gSel?.value || currentGroupFilter || 'all') || 'all');
+  const groupFiltered = groupVal !== 'all'
+    ? regionFiltered.filter(v=>v.group === groupVal)
+    : regionFiltered;
+
+  // -------- Unit options (depends on region+group) --------
+  if (uSel){
+    const cur = uSel.value || currentUnitFilter || 'all';
+    const units = Array.from(new Set(groupFiltered.map(v=>v.unit).filter(Boolean))).sort((a,b)=>a.localeCompare(b,'id'));
+    uSel.innerHTML = `<option value="all">Semua Unit</option>` + units.map(x=>`<option value="${escAttr(x)}">${esc(x)}</option>`).join('');
+    if (units.includes(cur)) uSel.value = cur;
+  }
+
+  const unitVal = String((uSel?.value || currentUnitFilter || 'all') || 'all');
+  const unitFiltered = unitVal !== 'all'
+    ? groupFiltered.filter(v=>v.unit === unitVal)
+    : groupFiltered;
+
+  // -------- Vehicle options (depends on region+group+unit) --------
+  const prev = vSel.value || currentVehicleFilter || 'all';
+  const uniq = Array.from(new Set(unitFiltered.map(v=>v.code).filter(Boolean))).sort((a,b)=>a.localeCompare(b,'id'));
+
+  const existing = Array.from(vSel.options).map(o=>o.value);
   const wanted = ['all', ...uniq];
   const same = existing.length === wanted.length && existing.every((v,i)=> v===wanted[i]);
 
   if (!same){
-    sel.innerHTML = '';
-    const optAll = document.createElement('option');
-    optAll.value = 'all';
-    optAll.textContent = 'Semua Kendaraan';
-    sel.appendChild(optAll);
-
-    for (const c of uniq){
-      const o = document.createElement('option');
-      o.value = c;
-      o.textContent = c;
-      sel.appendChild(o);
-    }
+    vSel.innerHTML = `<option value="all">Semua Kendaraan</option>` + uniq.map(c=>`<option value="${escAttr(c)}">${esc(c)}</option>`).join('');
   }
+  if (wanted.includes(prev)) vSel.value = prev;
+}
 
-  // restore selection
-  sel.value = wanted.includes(prev) ? prev : 'all';
-  currentVehicleFilter = sel.value || 'all';
 
-  // bind once
-  if (!sel.__bound){
-    sel.__bound = true;
-    sel.addEventListener('change', ()=> {
-      // support both inline onchange and listener
-      applyVehicleFilter(sel.value, { focus:true });
+
+let _vehicleFilterHooksReady = false;
+function ensureVehicleFilterHooks(){
+  if (_vehicleFilterHooksReady) return;
+  const rSel = getRegionFilterEl();
+  const gSel = getGroupFilterEl();
+  const uSel = getUnitFilterEl();
+  const vSel = getVehicleFilterEl();
+
+  const applyAll = ()=>{
+    currentRegionFilter  = rSel?.value || 'all';
+    currentGroupFilter   = gSel?.value || 'all';
+    currentUnitFilter    = uSel?.value || 'all';
+    currentVehicleFilter = vSel?.value || 'all';
+    applyVehicleFilter(currentVehicleFilter, { focus:true });
+  };
+
+  if (rSel){
+    rSel.addEventListener('change', ()=>{
+      currentRegionFilter = rSel.value || 'all';
+      // reset downstream
+      if (gSel) gSel.value = 'all';
+      if (uSel) uSel.value = 'all';
+      if (vSel) vSel.value = 'all';
+      ensureVehicleFilterOptions(lastVehiclesSnapshot);
+      applyAll();
+    });
+  }
+  if (gSel){
+    gSel.addEventListener('change', ()=>{
+      currentGroupFilter = gSel.value || 'all';
+      if (uSel) uSel.value = 'all';
+      if (vSel) vSel.value = 'all';
+      ensureVehicleFilterOptions(lastVehiclesSnapshot);
+      applyAll();
+    });
+  }
+  if (uSel){
+    uSel.addEventListener('change', ()=>{
+      currentUnitFilter = uSel.value || 'all';
+      if (vSel) vSel.value = 'all';
+      ensureVehicleFilterOptions(lastVehiclesSnapshot);
+      applyAll();
+    });
+  }
+  if (vSel){
+    vSel.addEventListener('change', ()=>{
+      applyAll();
     });
   }
 
   // expose global for inline HTML onchange="filterMapVehicles()"
-  if (!window.filterMapVehicles){
-    window.filterMapVehicles = () => {
-      const g = getGroupFilterEl()?.value || 'all';
-      const v = getVehicleFilterEl()?.value || 'all';
-      currentGroupFilter = String(g || 'all');
-      applyVehicleFilter(v, { focus:true });
-    };
-  }
-}
+  window.filterMapVehicles = () => {
+    ensureVehicleFilterOptions(lastVehiclesSnapshot);
+    applyAll();
+  };
 
+  _vehicleFilterHooksReady = true;
+}
 function markerVisibleFor(code){
   const c = normalizeCode(code);
-  if (currentVehicleFilter && currentVehicleFilter !== 'all'){
-    return c === normalizeCode(currentVehicleFilter);
+  const v = vehiclesByCode[c] || {};
+
+  const r = String(v?.region || '').trim();
+  const g = String(v?.group  || '').trim();
+  const u = String(v?.unit   || '').trim();
+
+  if (currentRegionFilter && currentRegionFilter !== 'all'){
+    if (r !== String(currentRegionFilter).trim()) return false;
   }
   if (currentGroupFilter && currentGroupFilter !== 'all'){
-    const g = String(vehiclesByCode[c]?.group || '').trim();
-    return g === String(currentGroupFilter).trim();
+    if (g !== String(currentGroupFilter).trim()) return false;
+  }
+  if (currentUnitFilter && currentUnitFilter !== 'all'){
+    if (u !== String(currentUnitFilter).trim()) return false;
+  }
+  if (currentVehicleFilter && currentVehicleFilter !== 'all'){
+    return c === normalizeCode(currentVehicleFilter);
   }
   return true;
 }
@@ -412,14 +495,55 @@ let drawerState = {
   loading: false
 };
 
-// ===== SCALE SETTINGS (80 kendaraan) =====
-const TRACK_SEND_MOVING_MS = 15000; // 15 detik saat bergerak
-const TRACK_SEND_IDLE_MS   = 60000; // 60 detik saat diam
+// ===== SCALE SETTINGS (Adaptive Tracking) =====
+// Target:
+// - Moving: 15–20 detik
+// - Idle  : 90–120 detik
+// - Sinyal buruk / error streak: otomatis naik interval (moving 30–60 detik; idle 120–180 detik)
 const TRACK_MIN_MOVE_M     = 50;    // kirim jika pindah >= 50 meter
 const TRACK_JITTER_MAX_MS  = 3000;  // random 0-3 detik agar tidak serentak
 
-function randJitterMs(){
-  return Math.floor(Math.random() * (TRACK_JITTER_MAX_MS + 1));
+const TRACK_MOVING_RANGE_MS     = [15000, 20000];
+const TRACK_IDLE_RANGE_MS       = [90000, 120000];
+const TRACK_POOR_MOVING_RANGE_MS= [30000, 60000];
+const TRACK_POOR_IDLE_RANGE_MS  = [120000, 180000];
+
+function clamp(n, a, b){ return Math.min(Math.max(n, a), b); }
+function randBetween(min, max){
+  const a = Number(min||0), b = Number(max||0);
+  return Math.floor(a + Math.random() * Math.max(0, (b - a)));
+}
+function randJitterMs(){ return Math.floor(Math.random() * (TRACK_JITTER_MAX_MS + 1)); }
+
+// Network quality (best-effort)
+function getNetInfo(){
+  const c = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+  if (!c) return null;
+  return {
+    effectiveType: String(c.effectiveType||'').toLowerCase(), // '4g','3g','2g','slow-2g'
+    downlink: Number(c.downlink||0),
+    rtt: Number(c.rtt||0),
+    saveData: !!c.saveData
+  };
+}
+function isPoorNetwork(){
+  const ni = getNetInfo();
+  if (!ni) return false;
+  if (ni.saveData) return true;
+  if (ni.effectiveType && (ni.effectiveType.includes('2g') || ni.effectiveType.includes('slow'))) return true;
+  if (Number.isFinite(ni.downlink) && ni.downlink > 0 && ni.downlink < 0.8) return true;
+  if (Number.isFinite(ni.rtt) && ni.rtt > 800) return true;
+  return false;
+}
+function computeAdaptiveGapMs({ isMoving, failStreak = 0 } = {}){
+  const poor = isPoorNetwork();
+  const range = isMoving
+    ? (poor ? TRACK_POOR_MOVING_RANGE_MS : TRACK_MOVING_RANGE_MS)
+    : (poor ? TRACK_POOR_IDLE_RANGE_MS   : TRACK_IDLE_RANGE_MS);
+
+  // exponential backoff on consecutive failures (cap x4)
+  const mult = clamp(Math.pow(2, clamp(failStreak, 0, 2)), 1, 4);
+  return Math.floor(randBetween(range[0], range[1]) * mult);
 }
 
 // ===== FAST MAP POLLING (realtime marker) =====
@@ -428,7 +552,7 @@ let fastTimer = null;
 let fastSession = null;     // simpan session terakhir untuk polling
 let fastInFlight = false;   // cegah overlap request
 
-function upsertVehicleMarkerFast(session, code, lat, lng, status){
+function upsertVehicleMarkerFast(session, code, lat, lng, status, ts){
   if (!map) return;
 
   // update meta lokal agar drawer/statusBadge ikut update
@@ -440,7 +564,9 @@ function upsertVehicleMarkerFast(session, code, lat, lng, status){
     ...prev,
     code: k,
     status: status || prev.status || 'on_the_way',
-    currentLocation: { lat, lng }
+    currentLocation: { lat, lng },
+    lastSeenAt: ts || prev.lastSeenAt || prev.lastLocAt || prev.lastUpdateAt || Date.now(),
+    ts: ts || prev.ts || 0
   };
 
   let marker = vehicleMarkers[k];
@@ -481,12 +607,14 @@ async function refreshMarkersFast(){
     const res = await api.mapFast(fastSession.sessionId, codes, 250);
     if (!res || !res.success) return;
 
+    lastServerNowMs = Number(res.now || Date.now());
     const list = res.vehicles || [];
     for (const v of list){
       const lat = Number(v.lat);
       const lng = Number(v.lng);
       if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
-      upsertVehicleMarkerFast(fastSession, v.code, lat, lng, v.status);
+      const ts = toMsMaybe(v.ts || v.lastLocAt || v.lastUpdateAt || v.lastSeenAt);
+      upsertVehicleMarkerFast(fastSession, v.code, lat, lng, v.status, ts);
     }
 
     // optional: update UI last update
@@ -935,15 +1063,15 @@ function startTracking(session, forcedVehicleCode = ''){
     }
 
     const isMoving = movedM >= TRACK_MIN_MOVE_M;
-    const minGap = (isMoving ? TRACK_SEND_MOVING_MS : TRACK_SEND_IDLE_MS) + (tracking._jitterMs || 0);
+
+    // adaptive gap + jitter (stabil untuk banyak user)
+    const desiredGap = computeAdaptiveGapMs({ isMoving, failStreak: tracking._failStreak || 0 });
+    const minGap = desiredGap + (tracking._jitterMs || 0);
 
     if (now - tracking.lastSentAt < minGap) return;
 
-    const allowSend =
-      (!tracking._lastSentCoord) ||
-      isMoving ||
-      (now - tracking.lastSentAt >= TRACK_SEND_IDLE_MS + (tracking._jitterMs||0));
-
+    // allow first send always, else if moved or gap met
+    const allowSend = (!tracking._lastSentCoord) || isMoving || (now - tracking.lastSentAt >= minGap);
     if (!allowSend) return;
 
     tracking.lastSentAt = now;
@@ -951,8 +1079,10 @@ function startTracking(session, forcedVehicleCode = ''){
     try{
       await api.updateLocation(session.sessionId, tracking.vehicleCode, lat, lng);
       tracking._lastSentCoord = { lat, lng };
+      tracking._failStreak = 0;
     }catch(e){
-      // retry nanti
+      // error → naikkan interval sementara via failStreak
+      tracking._failStreak = Math.min((tracking._failStreak || 0) + 1, 5);
     }
   }, 1200);
 
@@ -976,6 +1106,7 @@ function stopTracking({ silent=false } = {}){
   tracking.lastSentAt = 0;
   tracking.vehicleCode = '';
   tracking._jitterMs = 0;
+  tracking._failStreak = 0;
 
   try{ setMapTrackingButtons(false); }catch{}
   if (!silent) showNotification('Kirim lokasi dihentikan', 'info');
@@ -988,6 +1119,30 @@ function statusClass(st){
   if (st === 'arrived') return 'arrived';
   return 'unknown';
 }
+
+function toMsMaybe(x){
+  if (x == null || x === '') return 0;
+  if (typeof x === 'number') return x;
+  const s = String(x);
+  // epoch ms?
+  const n = Number(s);
+  if (Number.isFinite(n) && n > 1000000000) return n;
+  const d = new Date(s);
+  const t = d.getTime();
+  return Number.isFinite(t) ? t : 0;
+}
+
+function heatClassForAgeMs(ageMs){
+  const a = Number(ageMs);
+  if (!Number.isFinite(a)) return 'heat-unk';
+  // thresholds: <30s hot, <2m warm, <5m cool, <15m cold, else offline
+  if (a < 30*1000) return 'heat-hot';
+  if (a < 2*60*1000) return 'heat-warm';
+  if (a < 5*60*1000) return 'heat-cool';
+  if (a < 15*60*1000) return 'heat-cold';
+  return 'heat-offline';
+}
+
 
 // ambil inisial dari kode kendaraan (biar marker gampang dikenali)
 function markerTextFromCode(code){
@@ -1003,7 +1158,14 @@ function makeVehicleDivIcon(code, status){
   const cls = statusClass(status);
   const text = markerTextFromCode(code);
 
-  const html = `<div class="vmk ${cls}" title="${esc(code)}">${esc(text)}</div>`;
+  const v = vehiclesByCode[String(code||'').trim()] || {};
+  const ts = toMsMaybe(v.lastLocAt || v.lastUpdateAt || v.lastSeenAt || v.ts);
+  const now = Number(lastServerNowMs || Date.now());
+  const ageMs = ts ? Math.max(0, now - ts) : Number.POSITIVE_INFINITY;
+  const heat = heatClassForAgeMs(ageMs);
+
+  const title = ts ? `${esc(code)} • last: ${new Date(ts).toLocaleTimeString('id-ID')}` : esc(code);
+  const html = `<div class="vmk ${cls} ${heat}" title="${title}">${esc(text)}</div>`;
 
   return L.divIcon({
     className: 'vmk-wrap',
@@ -1049,11 +1211,14 @@ export async function refreshMap(session, { includeManifest = 0, fitMode = 'none
       }
 
     const vehicles = res.vehicles || [];
+    lastServerNowMs = Number(res.now || Date.now());
 
     vehiclesByCode = {};
     for (const v of vehicles){
       if (!v || !v.code) continue;
-      vehiclesByCode[String(v.code)] = v;
+      const code = String(v.code);
+      const ts = toMsMaybe(v.lastLocAt || v.lastUpdateAt || v.ts || v.lastSeenAt);
+      vehiclesByCode[code] = { ...v, lastSeenAt: ts || v.lastSeenAt || 0, ts: ts || 0 };
     }
     startFastPolling(session);
 
@@ -1074,6 +1239,7 @@ export async function refreshMap(session, { includeManifest = 0, fitMode = 'none
     // ✅ Live Maps: populate & apply vehicle filter
     lastVehiclesSnapshot = vehicles;
     ensureVehicleFilterOptions(vehicles);
+    ensureVehicleFilterHooks();
     applyVehicleFilter(currentVehicleFilter, { focus:false });
 
 

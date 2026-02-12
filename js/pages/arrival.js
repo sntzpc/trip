@@ -28,6 +28,7 @@ function esc(s){
 // ===== Geofence state (diambil dari SETTINGS via getConfig) =====
 let _fences = [];      // [{id,name,lat,lng,radiusM}]
 let _activeFence = null; // fence terpilih/terdekat
+let _fenceLockedByUser = false; // jika user memilih manual, jangan auto-override
 let _lastPos = null;    // {lat,lng,acc}
 let _lastDistM = null;  // jarak ke _activeFence
 
@@ -158,6 +159,7 @@ function renderFenceInfo(){
       const id = String(sel.value||'');
       const found = _fences.find(x=>x.id===id) || _fences[0];
       _activeFence = found;
+      _fenceLockedByUser = true;
       if (_lastPos && isFinite(_lastPos.lat) && isFinite(_lastPos.lng)){
         _lastDistM = haversineMeters(_lastPos.lat, _lastPos.lng, _activeFence.lat, _activeFence.lng);
       } else {
@@ -212,7 +214,7 @@ async function checkFenceAndToggleButtons(showToast=false){
     const acc = pos.coords.accuracy;
     _lastPos = { lat, lng, acc };
 
-    // hitung jarak ke semua titik → pilih terdekat
+    // hitung jarak ke semua titik (untuk info "terdekat")
     let best = null;
     for (const f of _fences){
       const d = haversineMeters(lat, lng, f.lat, f.lng);
@@ -220,20 +222,33 @@ async function checkFenceAndToggleButtons(showToast=false){
         best = { fence:f, distM:d };
       }
     }
-    _activeFence = best?.fence || _fences[0];
-    _lastDistM = best?.distM ?? null;
+
+    // ✅ Jangan override pilihan user: jika user memilih titik tertentu, gunakan itu.
+    if (!_activeFence) _activeFence = _fences[0];
+    if (!_fenceLockedByUser){
+      // mode auto: default gunakan yang terdekat
+      _activeFence = best?.fence || _fences[0];
+    }
+    _lastDistM = (_activeFence)
+      ? haversineMeters(lat, lng, _activeFence.lat, _activeFence.lng)
+      : (best?.distM ?? null);
 
     renderFenceInfo();
 
     const tol = Math.min(Math.max(acc||0,0), 50) + 5;
 
+    const okSelected = (_activeFence)
+      ? (haversineMeters(lat, lng, _activeFence.lat, _activeFence.lng) <= (_activeFence.radiusM + tol))
+      : false;
+
+    // Catatan: dulu pakai okAny (semua titik). Sekarang pakai titik yang dipilih agar sesuai tujuan.
     const okAny = _fences.some(f=>{
       const d = haversineMeters(lat, lng, f.lat, f.lng);
       return d <= (f.radiusM + tol);
     });
 
-    if (!okAny){
-      lock(`Jarak Anda ±${Math.round(_lastDistM)}m dari titik kedatangan terdekat (radius ${Math.round(_activeFence.radiusM)}m).`);
+    if (!okSelected){
+      lock(`Jarak Anda ±${Math.round(_lastDistM)}m dari titik kedatangan "${_activeFence ? esc(_activeFence.name) : 'titik'}" (radius ${Math.round(_activeFence?.radiusM||0)}m).`);
       if (showToast) showNotification('Anda belum berada dalam radius lokasi.', 'info');
       return { ok:false, distM:_lastDistM, fence:_activeFence };
     }

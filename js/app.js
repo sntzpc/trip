@@ -1,7 +1,7 @@
 import * as api from './core/api.js';
 import { resetAllOfflineData } from './core/idb.js';
 import { LS, loadSession, saveSession, clearSession, loadCfg, saveCfg } from './core/storage.js';
-import { $, showNotification, activateMenu, showPage, toggleSidebar as _toggleSidebar, closeSidebarOnMobile, showGpsBlocker, hideGpsBlocker } from './core/ui.js';
+import { $, showNotification, activateMenu, showPage, toggleSidebar as _toggleSidebar, closeSidebarOnMobile, showGpsBlocker, hideGpsBlocker, unlockVoiceOnce } from './core/ui.js';
 import { doLogin, bindLoginEnter } from './pages/login.js';
 import { loadDashboard, showRegionDetailsUI, hideRegionDetailsUI } from './pages/dashboard.js';
 import { initMap, refreshMap, stopTrackingPublic, startBackgroundTrackingPublic } from './pages/map.js';
@@ -136,6 +136,10 @@ document.addEventListener('DOMContentLoaded', async ()=>{
       navigator.serviceWorker.register('./sw.js').catch(()=>{});
     }
   }catch{}
+  // ✅ Voice unlock: butuh user gesture (mobile) agar TTS bisa jalan
+  const _unlockVoice = ()=>{ try{ unlockVoiceOnce(); }catch{} };
+  window.addEventListener('pointerdown', _unlockVoice, { once:true, capture:true });
+  window.addEventListener('touchstart', _unlockVoice, { once:true, capture:true });
 
   ensureSidebarOverlay();
   hideLoadingSoon();
